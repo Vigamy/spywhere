@@ -119,6 +119,7 @@
    'PYMODULE'),
   ('importlib.util', 'C:\\Python313\\Lib\\importlib\\util.py', 'PYMODULE'),
   ('inspect', 'C:\\Python313\\Lib\\inspect.py', 'PYMODULE'),
+  ('install', 'C:\\Users\\User\\spywhere\\install.py', 'PYMODULE'),
   ('ipaddress', 'C:\\Python313\\Lib\\ipaddress.py', 'PYMODULE'),
   ('json', 'C:\\Python313\\Lib\\json\\__init__.py', 'PYMODULE'),
   ('json.decoder', 'C:\\Python313\\Lib\\json\\decoder.py', 'PYMODULE'),

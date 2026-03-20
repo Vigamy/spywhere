@@ -1,4 +1,3 @@
-import logging
 import os
 import shutil
 import sys
@@ -6,16 +5,6 @@ import subprocess
 
 APP_NAME = "SysCache"
 INSTALL_DIR = os.path.join(os.getenv("APPDATA"), APP_NAME)
-LOG_FILE = os.path.join(INSTALL_DIR, "syscache.log")
-
-logging.basicConfig(filename=LOG_FILE, level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
-def create_readme():
-    readme_path = os.path.join(INSTALL_DIR, "README_ANDREY.txt")
-    with open(readme_path, "w") as f:
-        f.write("Oi, Andrey! Aqui eh o Will.\n")
-        f.write("Fiz esse teste aqui de um viruszinho e voce foi meu primeiro teste hehe.\n")
-        f.write("Parabens por ter encontrado!\n")
 
 def create_install_dir():
     if not os.path.exists(INSTALL_DIR):

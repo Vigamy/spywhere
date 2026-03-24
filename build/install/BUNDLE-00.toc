@@ -1,3 +1,0 @@
-([('install',
-   '/Users/willamy/Documents/Projects/spywhere/dist/install',
-   'EXECUTABLE')],)

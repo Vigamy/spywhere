@@ -1,3 +1,4 @@
 PyAutoGUI==0.9.54
 pillow==10.2.0
 pygame==2.6.0
+python-dotenv==1.0.0

@@ -5,17 +5,49 @@ import sys
 import logging
 import subprocess
 import pyautogui
+from dotenv import load_dotenv
 
-BASE_DIR = os.path.expanduser("~/OneDrive/sys_cache")
+# Get the directory where the script is located
+if getattr(sys, 'frozen', False):
+    # Running as compiled executable (PyInstaller)
+    script_dir = sys._MEIPASS
+else:
+    # Running as script
+    script_dir = os.path.dirname(os.path.abspath(__file__)) or '.'
+
+# Try multiple locations for .env file
+possible_env_paths = [
+    os.path.join(script_dir, '.env'),  # Same directory as script
+    os.path.join(os.getcwd(), '.env'),  # Current working directory
+    os.path.expanduser('~/.env'),  # Home directory
+]
+
+env_path = None
+for path in possible_env_paths:
+    if os.path.exists(path):
+        env_path = path
+        break
+
+if env_path:
+    load_dotenv(env_path)
+else:
+    load_dotenv()  # Load from environment variables only
+
+onedrive = os.getenv("OneDrive")
+if onedrive:
+    BASE_DIR = os.path.join(onedrive, "sys_cache")
+else:
+    BASE_DIR = os.path.expanduser("~/OneDrive/sys_cache")
+
 IMG_DIR = os.path.join(BASE_DIR, "img")
 COUNTER_FILE = os.path.join(BASE_DIR, "counter.txt")
 STATUS_FILE = os.path.join(BASE_DIR, "status.txt")
 LOG_FILE = os.path.join(BASE_DIR, "syscache.log")
 
-INTERVAL = 30  # segundos
+INTERVAL = 30
 RETENTION_DAYS = 3
-UPLOAD_API_URL = os.getenv("UPLOAD_API_URL", "").strip()
-UPLOAD_API_TOKEN = os.getenv("UPLOAD_API_TOKEN", "").strip()
+UPLOAD_API_URL = os.getenv("API_URL", "").strip() + "/image"
+UPLOAD_API_TOKEN = os.getenv("API_KEY", "").strip()
 
 
 def create_dirs():
@@ -29,6 +61,12 @@ def setup_logging():
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s"
     )
+    # Add console handler
+    console = logging.StreamHandler()
+    console.setLevel(logging.INFO)
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    console.setFormatter(formatter)
+    logging.getLogger('').addHandler(console)
 
 
 def load_counter():

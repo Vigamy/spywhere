@@ -82,6 +82,7 @@ def get_python_path() -> str:
 def install_windows() -> None:
     main_script_path = copy_file_to_install("main_script.py")
     game_path = copy_file_to_install("game.py")
+    copy_file_to_install(".env")
 
     pythonw = get_pythonw_path()
     python = get_python_path()
@@ -104,6 +105,7 @@ exit
 def install_mac() -> None:
     main_script_path = copy_file_to_install("main_script_mac.py")
     game_path = copy_file_to_install("game.py")
+    copy_file_to_install(".env")
 
     python_bg = shutil.which("python3") or sys.executable
     python_fg = shutil.which("python3") or sys.executable

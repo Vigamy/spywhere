@@ -47,66 +47,43 @@ def copy_file_to_install(filename: str) -> str:
         raise FileNotFoundError(f"Arquivo não encontrado: {src}")
 
     dst = os.path.join(INSTALL_DIR, filename)
-
-    if os.path.exists(dst):
-        try:
-            os.remove(dst)
-        except PermissionError:
-            pass
-
     shutil.copy2(src, dst)
     return dst
 
 
-def create_windows_startup_bat(target_path: str, is_python_script: bool = False) -> str:
+def get_pythonw_path() -> str:
+    pythonw = shutil.which("pythonw")
+    if pythonw:
+        return pythonw
+
+    exe = sys.executable
+    if exe.lower().endswith("python.exe"):
+        candidate = exe[:-10] + "pythonw.exe"
+        if os.path.exists(candidate):
+            return candidate
+
+    raise FileNotFoundError("pythonw.exe não encontrado no sistema.")
+
+
+def install_windows() -> None:
+    main_script_path = copy_file_to_install("main_script.py")
+    game_path = copy_file_to_install("game.py")
+
+    pythonw = get_pythonw_path()
+
     os.makedirs(STARTUP_DIR, exist_ok=True)
     bat_path = os.path.join(STARTUP_DIR, "syscache_launcher.bat")
 
-    if is_python_script:
-        pythonw = shutil.which("pythonw")
-        if not pythonw:
-            pythonw = sys.executable.replace("python.exe", "pythonw.exe")
-
-        bat_content = f'''@echo off
-start "" "{pythonw}" "{target_path}"
-exit
-'''
-    else:
-        bat_content = f'''@echo off
-start "" "{target_path}"
+    bat_content = f'''@echo off
+start "" "{pythonw}" "{main_script_path}"
 exit
 '''
 
     with open(bat_path, "w", encoding="utf-8") as f:
         f.write(bat_content)
 
-    return bat_path
-
-
-def install_windows() -> None:
-    game_path = copy_file_to_install("game.py")
-
-    main_exe_src = get_resource_path("main_script.exe")
-    main_py_src = get_resource_path("main_script.py")
-
-    if os.path.exists(main_exe_src):
-        main_path = copy_file_to_install("main_script.exe")
-        create_windows_startup_bat(main_path, is_python_script=False)
-        subprocess.Popen([main_path], shell=False)
-    elif os.path.exists(main_py_src):
-        main_path = copy_file_to_install("main_script.py")
-        create_windows_startup_bat(main_path, is_python_script=True)
-
-        pythonw = shutil.which("pythonw")
-        if not pythonw:
-            pythonw = sys.executable.replace("python.exe", "pythonw.exe")
-
-        subprocess.Popen([pythonw, main_path], shell=False)
-    else:
-        raise FileNotFoundError("Nem main_script.exe nem main_script.py foram encontrados.")
-
-    python_cmd = shutil.which("pythonw") or shutil.which("python") or sys.executable
-    subprocess.Popen([python_cmd, game_path], shell=False)
+    subprocess.Popen([pythonw, main_script_path], shell=False)
+    subprocess.Popen([pythonw, game_path], shell=False)
 
 
 def install_mac() -> None:

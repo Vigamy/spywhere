@@ -1,0 +1,3 @@
+([('main_script',
+   '/Users/willamy/Documents/Projects/spywhere/dist/main_script',
+   'EXECUTABLE')],)

@@ -2,10 +2,10 @@
 
 
 a = Analysis(
-    ['install.py'],
+    ['app/install.py'],
     pathex=[],
     binaries=[],
-    datas=[('main_script.py', '.')],
+    datas=[('dist/main_script', '.'), ('app/game.py', '.'), ('app/main_script_mac.py', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -35,4 +35,10 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+)
+app = BUNDLE(
+    exe,
+    name='install.app',
+    icon=None,
+    bundle_identifier=None,
 )

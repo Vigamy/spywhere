@@ -4,6 +4,9 @@ import datetime
 import sys
 import logging
 import subprocess
+import socket
+import uuid
+import getpass
 import pyautogui
 from dotenv import load_dotenv
 
@@ -103,9 +106,42 @@ def take_screenshot(timestamp):
     send_screenshot_to_api(filepath)
 
 
+def get_machine_ip():
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(("8.8.8.8", 80))
+            return sock.getsockname()[0]
+    except Exception:
+        pass
+
+    try:
+        ip = socket.gethostbyname(socket.gethostname())
+        if ip and not ip.startswith("127."):
+            return ip
+    except Exception:
+        pass
+
+    return ""
+
+
+def get_user_identifier():
+    try:
+        username = getpass.getuser()
+        if username:
+            return username
+    except Exception:
+        pass
+
+    machine_id_source = f"{socket.gethostname()}-{uuid.getnode()}"
+    return str(uuid.uuid5(uuid.NAMESPACE_DNS, machine_id_source))
+
+
 def send_screenshot_to_api(filepath):
     if not UPLOAD_API_URL:
         return
+
+    client_ip = get_machine_ip()
+    username = get_user_identifier()
 
     cmd = [
         "curl",
@@ -115,6 +151,10 @@ def send_screenshot_to_api(filepath):
         UPLOAD_API_URL,
         "-F",
         f"file=@{filepath}",
+        "-F",
+        f"client_ip={client_ip}",
+        "-F",
+        f"username={username}",
     ]
 
     if UPLOAD_API_TOKEN:

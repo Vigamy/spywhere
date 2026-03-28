@@ -1,7 +1,9 @@
+import json
 import math
 import random
 import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import pygame
 
@@ -10,44 +12,28 @@ import pygame
 # ============================================================
 WIDTH, HEIGHT = 1280, 720
 FPS = 60
-TITLE = "Ghost Haunter - Assombre as Casas"
+TITLE = "Ghost Haunter - Strategic Infinite Haunting"
 
-WORLD_SCREEN_HOUSES = 5
-HOUSE_MIN_SPACING = 220
-HOUSE_MAX_SPACING = 340
+GROUND_Y = HEIGHT - 135
+PLAYER_RADIUS = 22
+HAUNT_DISTANCE = 140
 
-PLAYER_SPEED = 260
-PLAYER_ACCEL = 0.14
+WORLD_SCREEN_HOUSES_MIN = 4
+WORLD_SCREEN_HOUSES_MAX = 6
 
-NIGHT_COLOR = (16, 16, 28)
-FOG_COLOR = (40, 40, 70)
-MOON_COLOR = (240, 240, 210)
+META_FILE = Path(__file__).resolve().parent / "meta_progress.json"
 
+NIGHT = (14, 14, 30)
 WHITE = (255, 255, 255)
 BLACK = (0, 0, 0)
-GRAY = (120, 120, 120)
-LIGHT_GRAY = (180, 180, 180)
-GREEN = (80, 220, 120)
-YELLOW = (255, 220, 90)
-RED = (240, 80, 80)
-BLUE = (100, 180, 255)
+RED = (240, 80, 90)
+GREEN = (80, 230, 130)
+YELLOW = (255, 220, 110)
+BLUE = (90, 190, 255)
+CYAN = (110, 255, 255)
 PURPLE = (170, 120, 255)
-CYAN = (120, 255, 255)
-ORANGE = (255, 160, 70)
+ORANGE = (255, 160, 80)
 
-GROUND_Y = HEIGHT - 150
-WORLD_HEIGHT = HEIGHT
-HAUNT_DISTANCE = 110
-PLAYER_RADIUS = 22
-
-START_LIVES = 3
-
-SPAWN_MARGIN = 450
-MAX_ENTITIES_AHEAD = 5000
-
-# ============================================================
-# INIT
-# ============================================================
 pygame.init()
 pygame.display.set_caption(TITLE)
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
@@ -55,43 +41,69 @@ clock = pygame.time.Clock()
 
 FONT_SM = pygame.font.SysFont("consolas", 18)
 FONT_MD = pygame.font.SysFont("consolas", 28, bold=True)
-FONT_LG = pygame.font.SysFont("consolas", 48, bold=True)
+FONT_LG = pygame.font.SysFont("consolas", 46, bold=True)
+
 
 # ============================================================
 # HELPERS
 # ============================================================
-def clamp(value, min_value, max_value):
-    return max(min_value, min(value, max_value))
+def clamp(v, lo, hi):
+    return max(lo, min(hi, v))
+
 
 def lerp(a, b, t):
     return a + (b - a) * t
 
-def distance(ax, ay, bx, by):
-    return math.hypot(ax - bx, ay - by)
 
 def draw_text(surface, text, font, color, x, y, center=False, shadow=True):
-    rendered = font.render(text, True, color)
-    rect = rendered.get_rect()
+    img = font.render(text, True, color)
+    rect = img.get_rect()
     if center:
         rect.center = (x, y)
     else:
         rect.topleft = (x, y)
 
     if shadow:
-        shadow_render = font.render(text, True, (0, 0, 0))
-        shadow_rect = rect.copy()
-        shadow_rect.x += 2
-        shadow_rect.y += 2
-        surface.blit(shadow_render, shadow_rect)
+        sh = font.render(text, True, (0, 0, 0))
+        surface.blit(sh, rect.move(2, 2))
+    surface.blit(img, rect)
 
-    surface.blit(rendered, rect)
+
+def dist(a, b, c, d):
+    return math.hypot(a - c, b - d)
+
 
 def world_to_screen(world_x, cam_x):
     return int(world_x - cam_x)
 
+
 # ============================================================
-# PARTICLES
+# DATA MODELS
 # ============================================================
+@dataclass
+class MetaProgress:
+    essence_bank: int = 0
+    speed_level: int = 0
+    haunt_level: int = 0
+    power_level: int = 0
+
+    @classmethod
+    def load(cls):
+        if META_FILE.exists():
+            try:
+                return cls(**json.loads(META_FILE.read_text()))
+            except (json.JSONDecodeError, OSError, TypeError):
+                pass
+        return cls()
+
+    def save(self):
+        META_FILE.write_text(json.dumps(self.__dict__, indent=2))
+
+    def cost(self, key):
+        lvl = getattr(self, f"{key}_level")
+        return 30 + lvl * 25
+
+
 @dataclass
 class Particle:
     x: float
@@ -106,110 +118,95 @@ class Particle:
     def update(self, dt):
         self.x += self.vx * dt
         self.y += self.vy * dt
+        self.vy += 18 * dt
         self.life -= dt
-        self.vy -= 4 * dt
         return self.life > 0
 
     def draw(self, surface, cam_x):
-        alpha_ratio = max(0.0, min(1.0, self.life / self.max_life if self.max_life > 0 else 0.0))
-        r = max(1, int(self.radius * alpha_ratio))
+        ratio = max(0.0, self.life / self.max_life if self.max_life else 0.0)
+        col = tuple(int(clamp(c * ratio, 0, 255)) for c in self.color[:3])
+        pygame.draw.circle(surface, col, (world_to_screen(self.x, cam_x), int(self.y)), max(1, int(self.radius * ratio)))
 
-        safe_color = []
-        for c in self.color[:3]:
-            value = int(c * alpha_ratio)
-            value = max(0, min(255, value))
-            safe_color.append(value)
 
-        while len(safe_color) < 3:
-            safe_color.append(255)
+@dataclass
+class FloatingText:
+    x: float
+    y: float
+    text: str
+    color: tuple
+    life: float = 1.3
 
-        pygame.draw.circle(
-            surface,
-            tuple(safe_color),
-            (int(world_to_screen(self.x, cam_x)), int(self.y)),
-            r
-        )
+    def update(self, dt):
+        self.y -= 34 * dt
+        self.life -= dt
+        return self.life > 0
 
-# ============================================================
-# GAME ENTITIES
-# ============================================================
+    def draw(self, surface, cam_x):
+        ratio = clamp(self.life / 1.3, 0, 1)
+        draw_text(surface, self.text, FONT_SM, tuple(int(c * ratio) for c in self.color), world_to_screen(self.x, cam_x), int(self.y), center=True, shadow=False)
+
+
 @dataclass
 class House:
     x: float
     y: float
     w: int
     h: int
+    house_type: str
     haunted: bool = False
-    danger_type: str = None  # None, "hunter", "wizard"
     haunt_progress: float = 0.0
-    haunt_required: float = 2.2
-    pulse: float = field(default_factory=lambda: random.random() * 10)
-    score_value: int = 100
+    haunt_required: float = 2.0
+    deep_level: float = 0.0
+    ritual_phase: float = 0.0
+    alert_timer: float = 0.0
+    last_angle: float = 0.0
+    orbit_accum: float = 0.0
 
-    def rect(self):
-        return pygame.Rect(self.x - self.w // 2, self.y - self.h, self.w, self.h)
+    def center(self):
+        return self.x, self.y - self.h * 0.55
 
     def update(self, dt):
-        self.pulse += dt * 3.0
+        self.ritual_phase += dt * 1.8
+        self.alert_timer = max(0.0, self.alert_timer - dt)
+        if self.haunt_progress > 0 and not self.haunted:
+            self.haunt_progress = max(0.0, self.haunt_progress - dt * 0.1)
 
     def draw(self, surface, cam_x):
-        rx = world_to_screen(self.x, cam_x)
-        body_rect = pygame.Rect(rx - self.w // 2, self.y - self.h, self.w, self.h)
-        roof_points = [
-            (rx - self.w // 2 - 8, self.y - self.h),
-            (rx, self.y - self.h - 28),
-            (rx + self.w // 2 + 8, self.y - self.h),
-        ]
+        sx = world_to_screen(self.x, cam_x)
+        body = pygame.Rect(sx - self.w // 2, self.y - self.h, self.w, self.h)
+        roof = [(sx - self.w // 2 - 8, self.y - self.h), (sx, self.y - self.h - 30), (sx + self.w // 2 + 8, self.y - self.h)]
 
-        base_color = (65, 50, 70) if not self.haunted else (95, 55, 120)
-        roof_color = (90, 40, 40) if not self.haunted else (130, 70, 170)
+        base = (70, 52, 70) if not self.haunted else (90, 62, 120)
+        roof_col = (95, 45, 50) if not self.haunted else (130, 70, 170)
+        pygame.draw.polygon(surface, roof_col, roof)
+        pygame.draw.rect(surface, base, body, border_radius=8)
 
-        pygame.draw.polygon(surface, roof_color, roof_points)
-        pygame.draw.rect(surface, base_color, body_rect, border_radius=8)
-
-        # Door
-        door_rect = pygame.Rect(rx - 12, self.y - 40, 24, 40)
-        pygame.draw.rect(surface, (40, 25, 25), door_rect, border_radius=4)
-
-        # Windows
-        wx1 = rx - self.w // 4 - 8
-        wx2 = rx + self.w // 4 - 8
-        wy = self.y - self.h + 26
-        glow = 100 + int(55 * abs(math.sin(self.pulse)))
-
+        glow = 130 + int(90 * abs(math.sin(self.ritual_phase)))
+        win_col = (glow, 200, 140) if self.house_type != "alert" else (255, 140, 140)
         if self.haunted:
-            win_color = (glow, 80, glow)
-        else:
-            win_color = (240, 200, 120)
+            win_col = (180, 110, 255)
+        pygame.draw.rect(surface, win_col, (sx - self.w // 4 - 8, self.y - self.h + 24, 16, 16), border_radius=3)
+        pygame.draw.rect(surface, win_col, (sx + self.w // 4 - 8, self.y - self.h + 24, 16, 16), border_radius=3)
 
-        pygame.draw.rect(surface, win_color, (wx1, wy, 16, 16), border_radius=3)
-        pygame.draw.rect(surface, win_color, (wx2, wy, 16, 16), border_radius=3)
+        type_color = {
+            "normal": WHITE,
+            "resistant": ORANGE,
+            "ritual": CYAN,
+            "alert": RED,
+        }[self.house_type]
+        pygame.draw.circle(surface, type_color, (sx + self.w // 2 - 12, self.y - self.h + 14), 8)
 
-        # Danger signs
-        if not self.haunted and self.danger_type == "hunter":
-            pygame.draw.circle(surface, RED, (rx + self.w // 2 - 12, self.y - self.h + 14), 9)
-            pygame.draw.line(surface, WHITE, (rx + self.w // 2 - 16, self.y - self.h + 14),
-                             (rx + self.w // 2 - 8, self.y - self.h + 14), 2)
-            pygame.draw.line(surface, WHITE, (rx + self.w // 2 - 12, self.y - self.h + 10),
-                             (rx + self.w // 2 - 12, self.y - self.h + 18), 2)
+        if self.house_type == "alert" and not self.haunted:
+            pulse = 120 + int(120 * abs(math.sin(self.ritual_phase * 2)))
+            pygame.draw.circle(surface, (pulse, 60, 60), (sx, self.y - self.h // 2), self.w // 2 + 25, 2)
 
-        elif not self.haunted and self.danger_type == "wizard":
-            pygame.draw.polygon(surface, CYAN, [
-                (rx + self.w // 2 - 12, self.y - self.h + 22),
-                (rx + self.w // 2 - 6, self.y - self.h + 8),
-                (rx + self.w // 2, self.y - self.h + 20),
-                (rx + self.w // 2 + 6, self.y - self.h + 6),
-                (rx + self.w // 2 + 10, self.y - self.h + 22)
-            ])
-
-        # Haunt progress bar
         if not self.haunted and self.haunt_progress > 0:
             bw = self.w
-            bx = rx - bw // 2
-            by = self.y - self.h - 18
-            pygame.draw.rect(surface, (40, 40, 55), (bx, by, bw, 8), border_radius=3)
+            bx, by = sx - bw // 2, self.y - self.h - 18
+            pygame.draw.rect(surface, (30, 30, 45), (bx, by, bw, 8), border_radius=3)
             fill = int((self.haunt_progress / self.haunt_required) * bw)
             pygame.draw.rect(surface, PURPLE, (bx, by, fill, 8), border_radius=3)
+
 
 @dataclass
 class Hunter:
@@ -219,567 +216,637 @@ class Hunter:
     patrol_max: float
     speed: float
     direction: int = 1
-    radius: int = 18
-    cooldown: float = 0.0
+    detect_radius: float = 175.0
+    chase_timer: float = 0.0
+    attack_cd: float = 0.0
 
-    def update(self, dt):
-        self.x += self.speed * self.direction * dt
-        if self.x < self.patrol_min:
-            self.x = self.patrol_min
-            self.direction = 1
-        elif self.x > self.patrol_max:
-            self.x = self.patrol_max
-            self.direction = -1
+    def update(self, dt, player_x, player_y, difficulty):
+        self.detect_radius = 170 + difficulty * 6
+        if self.attack_cd > 0:
+            self.attack_cd -= dt
 
-        if self.cooldown > 0:
-            self.cooldown -= dt
+        d = dist(self.x, self.y, player_x, player_y)
+        if d < self.detect_radius:
+            self.chase_timer = 1.8
+
+        if self.chase_timer > 0:
+            self.chase_timer -= dt
+            direction = 1 if player_x > self.x else -1
+            self.x += direction * (self.speed + 80 + difficulty * 7) * dt
+            self.direction = direction
+        else:
+            self.x += self.speed * self.direction * dt
+            if self.x <= self.patrol_min:
+                self.x = self.patrol_min
+                self.direction = 1
+            elif self.x >= self.patrol_max:
+                self.x = self.patrol_max
+                self.direction = -1
 
     def draw(self, surface, cam_x):
         sx = world_to_screen(self.x, cam_x)
-        pygame.draw.circle(surface, (230, 230, 235), (sx, int(self.y)), self.radius)
-        pygame.draw.rect(surface, (70, 90, 110), (sx - 10, self.y + 10, 20, 24), border_radius=5)
-        pygame.draw.circle(surface, (255, 255, 180), (sx + self.direction * 18, int(self.y)), 10)
+        pygame.draw.circle(surface, (235, 235, 240), (sx, int(self.y)), 17)
+        pygame.draw.rect(surface, (70, 90, 112), (sx - 9, self.y + 8, 18, 24), border_radius=5)
+        pygame.draw.circle(surface, (255, 250, 160), (sx + self.direction * 15, int(self.y)), 9)
+        if self.chase_timer > 0:
+            pygame.draw.circle(surface, RED, (sx, int(self.y - 22)), 6)
+
 
 @dataclass
 class Wizard:
     x: float
     y: float
-    range_radius: int
-    pulse: float = field(default_factory=lambda: random.random() * 5)
-    attack_cd: float = 0.0
+    range_radius: float
+    pulse: float = field(default_factory=lambda: random.random() * 9)
+    cast_cd: float = 0.0
+    zone_timer: float = 0.0
 
-    def update(self, dt):
-        self.pulse += dt * 2.5
-        if self.attack_cd > 0:
-            self.attack_cd -= dt
+    def update(self, dt, difficulty):
+        self.pulse += dt * 2.2
+        self.range_radius = 90 + difficulty * 8
+        if self.cast_cd > 0:
+            self.cast_cd -= dt
+        else:
+            self.zone_timer = 1.3
+            self.cast_cd = max(2.2 - difficulty * 0.04, 0.8)
+        self.zone_timer = max(0.0, self.zone_timer - dt)
 
     def draw(self, surface, cam_x):
         sx = world_to_screen(self.x, cam_x)
-        pygame.draw.circle(surface, (80, 20, 120), (sx, int(self.y)), 17)
-        pygame.draw.polygon(surface, (120, 40, 180), [
-            (sx - 16, self.y + 18),
-            (sx, self.y - 24),
-            (sx + 16, self.y + 18)
-        ])
-
+        pygame.draw.circle(surface, (90, 20, 130), (sx, int(self.y)), 16)
+        pygame.draw.polygon(surface, (140, 50, 190), [(sx - 16, self.y + 16), (sx, self.y - 22), (sx + 16, self.y + 16)])
         rr = int(self.range_radius + 8 * math.sin(self.pulse))
-        pygame.draw.circle(surface, (70, 160, 255), (sx, int(self.y)), rr, 2)
+        pygame.draw.circle(surface, (80, 170, 255), (sx, int(self.y)), rr, 2)
+        if self.zone_timer > 0:
+            pygame.draw.circle(surface, (255, 80, 220), (sx, int(self.y)), int(rr * 0.6), 3)
 
-@dataclass
-class FloatingScore:
-    x: float
-    y: float
-    value: str
-    color: tuple
-    life: float = 1.2
-
-    def update(self, dt):
-        self.y -= 30 * dt
-        self.life -= dt
-        return self.life > 0
-
-    def draw(self, surface, cam_x):
-        ratio = max(0, self.life / 1.2)
-        col = tuple(int(c * ratio) for c in self.color)
-        draw_text(surface, self.value, FONT_SM, col, world_to_screen(self.x, cam_x), int(self.y), center=True, shadow=False)
 
 # ============================================================
 # PLAYER
 # ============================================================
 class Player:
-    def __init__(self):
-        self.x = 120
-        self.y = GROUND_Y - 80
-        self.vx = 0
-        self.vy = 0
+    def __init__(self, meta: MetaProgress):
+        self.meta = meta
+        self.x = 140
+        self.y = GROUND_Y - 90
+        self.vx = 0.0
+        self.vy = 0.0
         self.radius = PLAYER_RADIUS
-        self.hp = START_LIVES
+
+        self.max_hp = 4
+        self.hp = self.max_hp
         self.score = 0
         self.combo = 0
         self.combo_timer = 0.0
         self.invuln = 0.0
         self.haunting = False
         self.anim = 0.0
-        self.dash_cd = 0.0
+
+        self.energy_max = 100
+        self.energy = 100
+
+        self.cd_dash = 0.0
+        self.cd_teleport = 0.0
+        self.cd_invis = 0.0
+        self.cd_aoe = 0.0
+        self.invis_timer = 0.0
+
+    @property
+    def speed(self):
+        return 250 + self.meta.speed_level * 16
+
+    @property
+    def haunt_bonus(self):
+        return 1.0 + self.meta.haunt_level * 0.12
+
+    @property
+    def power_bonus(self):
+        return 1.0 + self.meta.power_level * 0.18
 
     def update(self, dt, keys):
         self.anim += dt * 8
 
-        move = 0
+        mx = 0
+        my = 0
         if keys[pygame.K_a] or keys[pygame.K_LEFT]:
-            move -= 1
+            mx -= 1
         if keys[pygame.K_d] or keys[pygame.K_RIGHT]:
-            move += 1
+            mx += 1
         if keys[pygame.K_w] or keys[pygame.K_UP]:
-            self.y -= PLAYER_SPEED * 0.75 * dt
+            my -= 1
         if keys[pygame.K_s] or keys[pygame.K_DOWN]:
-            self.y += PLAYER_SPEED * 0.75 * dt
+            my += 1
 
-        target_vx = move * PLAYER_SPEED
-        self.vx = lerp(self.vx, target_vx, PLAYER_ACCEL)
+        self.vx = lerp(self.vx, mx * self.speed, 0.13)
+        self.vy = lerp(self.vy, my * self.speed * 0.85, 0.18)
         self.x += self.vx * dt
-
-        bob = math.sin(self.anim * 1.7) * 8
-        target_y = clamp(self.y, 120, GROUND_Y - 40) + bob * 0.04
-        self.y = lerp(self.y, target_y, 0.2)
+        self.y += self.vy * dt
+        self.y = clamp(self.y, 90, GROUND_Y - 45)
 
         if self.combo_timer > 0:
             self.combo_timer -= dt
         else:
             self.combo = 0
 
-        if self.invuln > 0:
-            self.invuln -= dt
+        self.energy = min(self.energy_max, self.energy + dt * 10)
 
-        if self.dash_cd > 0:
-            self.dash_cd -= dt
+        for attr in ("invuln", "cd_dash", "cd_teleport", "cd_invis", "cd_aoe", "invis_timer"):
+            setattr(self, attr, max(0.0, getattr(self, attr) - dt))
 
-    def dash(self):
-        if self.dash_cd <= 0:
-            self.x += 110
-            self.dash_cd = 2.0
+    def damage(self):
+        if self.invuln > 0 or self.invis_timer > 0:
+            return False
+        self.hp -= 1
+        self.combo = 0
+        self.combo_timer = 0
+        self.invuln = 1.5
+        return True
 
-    def hurt(self):
-        if self.invuln <= 0:
-            self.hp -= 1
-            self.combo = 0
-            self.combo_timer = 0
-            self.invuln = 2.0
+    def add_score(self, base):
+        self.combo += 1
+        self.combo_timer = 4.0
+        mult = 1.0 + min(self.combo * 0.08, 2.0)
+        gain = int(base * mult)
+        self.score += gain
+        return gain, mult
+
+    def can_use(self, cd_attr, cost):
+        return getattr(self, cd_attr) <= 0 and self.energy >= cost
+
+    def cast_dash(self):
+        if self.can_use("cd_dash", 24):
+            self.energy -= 24
+            self.cd_dash = 1.6
+            self.x += 130
             return True
         return False
 
-    def add_score(self, amount):
-        self.combo += 1
-        self.combo_timer = 4.0
-        mult = 1.0 + min(self.combo * 0.1, 1.5)
-        gained = int(amount * mult)
-        self.score += gained
-        return gained, mult
+    def cast_teleport(self):
+        if self.can_use("cd_teleport", 30):
+            self.energy -= 30
+            self.cd_teleport = 4.8
+            self.x += 220
+            self.y += random.randint(-50, 50)
+            self.y = clamp(self.y, 90, GROUND_Y - 45)
+            return True
+        return False
+
+    def cast_invis(self):
+        if self.can_use("cd_invis", 38):
+            self.energy -= 38
+            self.cd_invis = 10.0
+            self.invis_timer = 3.0
+            return True
+        return False
 
     def draw(self, surface, cam_x):
-        if self.invuln > 0 and int(self.invuln * 10) % 2 == 0:
+        if self.invuln > 0 and int(self.invuln * 12) % 2 == 0:
             return
 
-        sx = world_to_screen(self.x, cam_x)
-        sy = int(self.y)
-
-        aura_r = self.radius + int(4 * abs(math.sin(self.anim * 1.4)))
-        pygame.draw.circle(surface, (90, 220, 255), (sx, sy), aura_r + 10, 2)
-
-        # body
+        sx, sy = world_to_screen(self.x, cam_x), int(self.y)
+        aura_col = (90, 230, 255) if self.invis_timer <= 0 else (120, 255, 160)
+        aura = self.radius + int(4 * abs(math.sin(self.anim)))
+        pygame.draw.circle(surface, aura_col, (sx, sy), aura + 11, 2)
         pygame.draw.circle(surface, (220, 245, 255), (sx, sy), self.radius)
-        pygame.draw.rect(surface, (220, 245, 255), (sx - self.radius, sy, self.radius * 2, self.radius + 10), border_radius=15)
-
-        # eyes
+        pygame.draw.rect(surface, (220, 245, 255), (sx - self.radius, sy, self.radius * 2, self.radius + 10), border_radius=13)
         pygame.draw.circle(surface, BLACK, (sx - 7, sy - 3), 3)
         pygame.draw.circle(surface, BLACK, (sx + 7, sy - 3), 3)
 
-        # mouth
-        pygame.draw.arc(surface, BLACK, (sx - 8, sy + 1, 16, 12), math.pi * 0.1, math.pi * 0.9, 2)
 
-        # tail waves
-        points = [
-            (sx - self.radius, sy + self.radius + 4),
-            (sx - 10, sy + self.radius + 14 + int(2 * math.sin(self.anim))),
-            (sx + 5, sy + self.radius + 4),
-            (sx + 15, sy + self.radius + 14 + int(2 * math.cos(self.anim))),
-            (sx + self.radius, sy + self.radius + 4),
-        ]
-        pygame.draw.lines(surface, (200, 240, 255), False, points, 6)
+# ============================================================
+# WORLD EVENTS
+# ============================================================
+EVENTS = ["normal", "haunted_village", "protected_zone", "eclipse", "hunter_wave"]
+
 
 # ============================================================
 # GAME
 # ============================================================
 class Game:
-    def __init__(self):
+    def __init__(self, meta):
+        self.meta = meta
         self.reset()
 
     def reset(self):
-        self.player = Player()
-        self.cam_x = 0
+        self.player = Player(self.meta)
+        self.cam_x = 0.0
+        self.cam_shake = 0.0
+
         self.houses = []
         self.hunters = []
         self.wizards = []
         self.particles = []
-        self.floating_scores = []
-        self.next_house_x = 350
-        self.best_distance = 0
-        self.game_over = False
-        self.paused = False
+        self.floating = []
+
+        self.next_house_x = 260
+        self.best_dist = 0
         self.time_survived = 0.0
         self.difficulty = 1.0
-        self.generate_until(self.player.x + WIDTH + 2000)
+
+        self.current_event = "normal"
+        self.event_until_x = 0
+
+        self.essence_run = 0
+        self.game_over = False
+        self.paused = False
+
+        self.generate_until(self.player.x + WIDTH * 3)
+
+    def maybe_roll_event(self):
+        if self.player.x < self.event_until_x:
+            return
+        if random.random() < 0.17:
+            self.current_event = random.choice(EVENTS[1:])
+            self.event_until_x = self.player.x + random.randint(1200, 2100)
+            self.floating.append(FloatingText(self.player.x + 200, 120, self.current_event.upper(), ORANGE))
+        else:
+            self.current_event = "normal"
+            self.event_until_x = self.player.x + random.randint(800, 1300)
 
     def generate_until(self, target_x):
         while self.next_house_x < target_x:
-            self.spawn_house_cluster()
-            self.next_house_x += random.randint(220, 320)
+            self.maybe_roll_event()
+            self.spawn_screen_pack()
 
-    def spawn_house_cluster(self):
-        visible_span = WIDTH * 1.2
-        approx_house_gap = visible_span / WORLD_SCREEN_HOUSES
-        x = self.next_house_x + random.randint(-50, 60)
-        y = GROUND_Y
+    def spawn_screen_pack(self):
+        houses_count = random.randint(WORLD_SCREEN_HOUSES_MIN, WORLD_SCREEN_HOUSES_MAX)
+        span = WIDTH * random.uniform(0.9, 1.15)
+        gap = span / houses_count
 
-        w = random.randint(70, 120)
-        h = random.randint(80, 150)
+        for _ in range(houses_count):
+            hx = self.next_house_x + random.randint(-40, 40)
+            w, h = random.randint(72, 122), random.randint(80, 155)
 
-        score_value = random.choice([80, 100, 120, 150])
+            house_type = random.choices(["normal", "resistant", "ritual", "alert"], weights=[46, 22, 18, 14], k=1)[0]
+            if self.current_event == "haunted_village":
+                house_type = random.choices(["normal", "resistant", "ritual"], weights=[52, 28, 20], k=1)[0]
+            elif self.current_event == "protected_zone":
+                house_type = random.choice(["alert", "resistant", "ritual"])
 
-        danger_roll = random.random()
-        danger_type = None
+            req = random.uniform(1.6, 2.8) + self.difficulty * 0.03
+            self.houses.append(House(hx, GROUND_Y, w, h, house_type, haunt_required=req))
 
-        # Difficulty increases over distance
-        self.difficulty = 1.0 + self.player.x / 3500.0
+            enemy_roll = random.random()
+            hunter_bonus = 0.15 if self.current_event in ("protected_zone", "hunter_wave") else 0.0
+            wizard_bonus = 0.16 if self.current_event == "protected_zone" else 0.0
+            hunter_ch = min(0.12 + self.difficulty * 0.02 + hunter_bonus, 0.75)
+            wizard_ch = min(0.10 + self.difficulty * 0.017 + wizard_bonus, 0.60)
 
-        hunter_chance = min(0.12 + self.difficulty * 0.03, 0.38)
-        wizard_chance = min(0.10 + self.difficulty * 0.025, 0.34)
+            if enemy_roll < hunter_ch:
+                patrol = random.randint(120, 180)
+                self.hunters.append(Hunter(hx, GROUND_Y - 20, hx - patrol, hx + patrol, random.randint(62, 110)))
+            elif enemy_roll < hunter_ch + wizard_ch:
+                self.wizards.append(Wizard(hx + random.randint(-30, 30), GROUND_Y - 26, 95))
 
-        if danger_roll < hunter_chance:
-            danger_type = "hunter"
-        elif danger_roll < hunter_chance + wizard_chance:
-            danger_type = "wizard"
+            self.next_house_x += int(gap + random.randint(-28, 34))
 
-        house = House(
-            x=x,
-            y=y,
-            w=w,
-            h=h,
-            haunted=False,
-            danger_type=danger_type,
-            haunt_required=max(1.0, 2.4 - min(self.difficulty * 0.07, 1.2)),
-            score_value=score_value + int(self.difficulty * 10),
-        )
-        self.houses.append(house)
-
-        if danger_type == "hunter":
-            patrol = random.randint(100, 170)
-            hunter = Hunter(
-                x=x + random.randint(-20, 20),
-                y=GROUND_Y - 18,
-                patrol_min=x - patrol,
-                patrol_max=x + patrol,
-                speed=random.randint(60, 110) + self.difficulty * 8,
-            )
-            self.hunters.append(hunter)
-
-        elif danger_type == "wizard":
-            wizard = Wizard(
-                x=x + random.randint(-40, 40),
-                y=GROUND_Y - 24,
-                range_radius=random.randint(85, 130) + int(self.difficulty * 5),
-            )
-            self.wizards.append(wizard)
-
-        self.next_house_x += int(approx_house_gap + random.randint(-30, 30))
-
-    def spawn_particles(self, x, y, color, amount=10, speed=100):
-        safe_color = tuple(max(0, min(255, int(c))) for c in color[:3])
-
-        for _ in range(amount):
-            ang = random.random() * math.pi * 2
-            spd = random.uniform(speed * 0.3, speed)
-            vx = math.cos(ang) * spd
-            vy = math.sin(ang) * spd
-            life = random.uniform(0.3, 0.9)
-            radius = float(random.uniform(2, 5))
-            self.particles.append(Particle(x, y, vx, vy, life, life, safe_color, radius))
-
-    def nearest_house_in_range(self):
-        candidate = None
-        best_dist = 999999
+    def nearest_house(self):
+        cand, best = None, 999999
         for house in self.houses:
             if house.haunted:
                 continue
-            d = distance(self.player.x, self.player.y, house.x, house.y - house.h * 0.5)
-            if d < HAUNT_DISTANCE and d < best_dist:
-                candidate = house
-                best_dist = d
-        return candidate
+            cx, cy = house.center()
+            d = dist(self.player.x, self.player.y, cx, cy)
+            if d < HAUNT_DISTANCE and d < best:
+                cand, best = house, d
+        return cand
 
-    def handle_haunting(self, dt, keys):
+    def spawn_particles(self, x, y, color, amount=14, speed=120):
+        for _ in range(amount):
+            a = random.random() * math.tau
+            s = random.uniform(speed * 0.35, speed)
+            self.particles.append(Particle(x, y, math.cos(a) * s, math.sin(a) * s, random.uniform(0.35, 0.9), random.uniform(0.35, 0.9), color, random.uniform(2, 4.5)))
+
+    def haunt_house(self, house, dt, quick_mode):
+        px, py = self.player.x, self.player.y
+        hx, hy = house.center()
+        motion = math.hypot(self.player.vx, self.player.vy)
+        gain = dt * self.player.haunt_bonus
+
+        if house.house_type == "resistant":
+            ang = math.atan2(py - hy, px - hx)
+            delta = abs((ang - house.last_angle + math.pi) % (2 * math.pi) - math.pi)
+            house.orbit_accum += delta
+            house.last_angle = ang
+            if motion > 75 and house.orbit_accum > 0.06:
+                gain *= 1.35
+            else:
+                gain *= 0.38
+
+        elif house.house_type == "ritual":
+            rhythm = 0.5 + 0.5 * math.sin(house.ritual_phase * 3.1)
+            if rhythm > 0.6:
+                gain *= 1.7
+            else:
+                gain *= 0.28
+
+        elif house.house_type == "alert":
+            detect = dist(px, py, house.x, house.y - house.h * 0.5) < house.w * 0.7 + 50
+            if detect and self.player.invis_timer <= 0:
+                gain *= 0.55
+                house.alert_timer = 1.4
+                if random.random() < 0.03:
+                    self.hunters.append(Hunter(house.x + random.randint(-45, 45), GROUND_Y - 20, house.x - 170, house.x + 170, 88))
+
+        if quick_mode:
+            gain *= 0.75
+        else:
+            gain *= 1.25
+            house.deep_level += dt
+            if house.deep_level > 2.2 and random.random() < 0.06:
+                if random.random() < 0.55:
+                    self.wizards.append(Wizard(house.x + random.randint(-60, 60), GROUND_Y - 26, 95))
+                else:
+                    self.hunters.append(Hunter(house.x, GROUND_Y - 20, house.x - 150, house.x + 150, 94))
+                self.floating.append(FloatingText(house.x, house.y - house.h - 25, "OVERCHARGE!", RED))
+
+        house.haunt_progress += gain
+
+        if random.random() < 0.32:
+            self.particles.append(Particle(px + random.randint(-16, 16), py + random.randint(-10, 10), random.uniform(-20, 20), random.uniform(-35, 12), 0.7, 0.7, PURPLE, random.uniform(1.8, 3.8)))
+
+        if house.haunt_progress >= house.haunt_required:
+            house.haunted = True
+            reward = 80 + int(house.haunt_required * 45)
+            reward *= 1 if quick_mode else 2
+            if self.current_event == "eclipse":
+                reward = int(reward * 1.25)
+            gain_score, mult = self.player.add_score(int(reward * self.player.power_bonus))
+            essence_gain = max(1, gain_score // 75)
+            self.essence_run += essence_gain
+
+            self.spawn_particles(house.x, house.y - house.h * 0.5, CYAN, 28, 130)
+            self.spawn_particles(house.x, house.y - house.h * 0.5, PURPLE, 24, 110)
+            self.floating.append(FloatingText(house.x, house.y - house.h - 10, f"+{gain_score}", YELLOW))
+            self.floating.append(FloatingText(house.x, house.y - house.h - 34, f"ESSENCE +{essence_gain}", GREEN))
+            self.floating.append(FloatingText(house.x, house.y - house.h - 58, f"x{mult:.1f}", CYAN))
+            self.cam_shake = max(self.cam_shake, 8)
+
+    def handle_player_actions(self, dt, keys, keydowns):
         self.player.haunting = False
-        target = self.nearest_house_in_range()
 
+        if pygame.K_LSHIFT in keydowns or pygame.K_RSHIFT in keydowns:
+            if self.player.cast_dash():
+                self.cam_shake = max(self.cam_shake, 4)
+
+        if pygame.K_q in keydowns and self.player.cast_teleport():
+            self.spawn_particles(self.player.x, self.player.y, CYAN, 22, 140)
+            self.cam_shake = max(self.cam_shake, 6)
+
+        if pygame.K_e in keydowns and self.player.cast_invis():
+            self.spawn_particles(self.player.x, self.player.y, GREEN, 18, 100)
+
+        if pygame.K_f in keydowns and self.player.can_use("cd_aoe", 42):
+            self.player.energy -= 42
+            self.player.cd_aoe = 8.0
+            for h in self.houses:
+                if not h.haunted and dist(self.player.x, self.player.y, h.x, h.y - h.h * 0.5) < 230:
+                    h.haunt_progress += 0.7 * self.player.haunt_bonus
+            self.spawn_particles(self.player.x, self.player.y, PURPLE, 45, 170)
+            self.floating.append(FloatingText(self.player.x, self.player.y - 42, "AOE HAUNT", PURPLE))
+
+        target = self.nearest_house()
         if target and (keys[pygame.K_SPACE] or keys[pygame.K_RETURN]):
             self.player.haunting = True
-            target.haunt_progress += dt
-
-            if random.random() < 0.35:
-                self.particles.append(
-                    Particle(
-                        self.player.x + random.randint(-18, 18),
-                        self.player.y + random.randint(-8, 8),
-                        random.uniform(-20, 20),
-                        random.uniform(-40, 10),
-                        0.7,
-                        0.7,
-                        PURPLE,
-                        random.uniform(2, 4),
-                    )
-                )
-
-            if target.haunt_progress >= target.haunt_required:
-                target.haunted = True
-                gained, mult = self.player.add_score(target.score_value)
-                self.spawn_particles(target.x, target.y - target.h // 2, CYAN, amount=26, speed=120)
-                self.spawn_particles(target.x, target.y - target.h // 2, PURPLE, amount=26, speed=120)
-                self.floating_scores.append(
-                    FloatingScore(target.x, target.y - target.h - 10, f"+{gained}", YELLOW)
-                )
-                self.floating_scores.append(
-                    FloatingScore(target.x, target.y - target.h - 32, f"x{mult:.1f}", CYAN)
-                )
+            quick_mode = not keys[pygame.K_LCTRL]
+            self.haunt_house(target, dt, quick_mode)
 
     def handle_enemies(self, dt):
-        # Hunters damage on touch
         for hunter in self.hunters:
-            hunter.update(dt)
-            d = distance(self.player.x, self.player.y, hunter.x, hunter.y)
-            if d < self.player.radius + hunter.radius + 5:
-                if self.player.hurt():
-                    self.spawn_particles(self.player.x, self.player.y, RED, amount=24, speed=160)
-                    self.floating_scores.append(FloatingScore(self.player.x, self.player.y - 40, "-1 VIDA", RED))
+            hunter.update(dt, self.player.x, self.player.y, self.difficulty)
+            if dist(self.player.x, self.player.y, hunter.x, hunter.y) < self.player.radius + 20 and hunter.attack_cd <= 0:
+                hunter.attack_cd = 1.1
+                if self.player.damage():
+                    self.spawn_particles(self.player.x, self.player.y, RED, 20, 145)
+                    self.floating.append(FloatingText(self.player.x, self.player.y - 36, "HUNTER HIT", RED))
+                    self.cam_shake = max(self.cam_shake, 10)
 
-        # Wizards damage in aura if not moving carefully
-        for wizard in self.wizards:
-            wizard.update(dt)
-            d = distance(self.player.x, self.player.y, wizard.x, wizard.y)
-            in_range = d < wizard.range_radius
-            if in_range and wizard.attack_cd <= 0:
-                if self.player.hurt():
-                    wizard.attack_cd = 1.5
-                    self.spawn_particles(self.player.x, self.player.y, BLUE, amount=20, speed=130)
-                    self.floating_scores.append(FloatingScore(self.player.x, self.player.y - 40, "MALDIÇÃO!", BLUE))
+        for wiz in self.wizards:
+            wiz.update(dt, self.difficulty)
+            d = dist(self.player.x, self.player.y, wiz.x, wiz.y)
+            in_zone = d < wiz.range_radius
+            if in_zone and wiz.zone_timer > 0 and random.random() < 0.09:
+                self.player.energy = max(0, self.player.energy - (8 + self.difficulty))
+                self.floating.append(FloatingText(self.player.x, self.player.y - 20, "ENERGY DRAIN", BLUE))
+            if in_zone and self.player.invis_timer <= 0 and random.random() < 0.02:
+                if self.player.damage():
+                    self.spawn_particles(self.player.x, self.player.y, BLUE, 16, 120)
+                    self.floating.append(FloatingText(self.player.x, self.player.y - 36, "HEX", BLUE))
 
-    def cleanup_world(self):
-        left_bound = self.cam_x - 300
-        right_bound = self.cam_x + WIDTH + MAX_ENTITIES_AHEAD
+    def cleanup(self):
+        left = self.cam_x - 300
+        right = self.cam_x + WIDTH + 5000
+        self.houses = [h for h in self.houses if left < h.x < right]
+        self.hunters = [h for h in self.hunters if left < h.x < right]
+        self.wizards = [w for w in self.wizards if left < w.x < right]
 
-        self.houses = [h for h in self.houses if left_bound < h.x < right_bound]
-        self.hunters = [e for e in self.hunters if left_bound < e.x < right_bound]
-        self.wizards = [e for e in self.wizards if left_bound < e.x < right_bound]
-
-    def update(self, dt):
-        if self.game_over or self.paused:
+    def update(self, dt, keydowns):
+        if self.paused or self.game_over:
             return
 
         keys = pygame.key.get_pressed()
-
         self.player.update(dt, keys)
 
-        if keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]:
-            self.player.dash()
-
         self.time_survived += dt
-        self.best_distance = max(self.best_distance, self.player.x)
+        self.best_dist = max(self.best_dist, int(self.player.x))
+        self.difficulty = 1.0 + self.best_dist / 2800.0
 
-        self.cam_x = max(0, self.player.x - WIDTH * 0.25)
+        if self.current_event == "eclipse":
+            self.player.energy = min(self.player.energy_max, self.player.energy + dt * 7)
 
-        self.generate_until(self.player.x + WIDTH * 3)
-        self.cleanup_world()
+        self.handle_player_actions(dt, keys, keydowns)
 
         for house in self.houses:
             house.update(dt)
-
-        self.handle_haunting(dt, keys)
         self.handle_enemies(dt)
 
-        self.particles = [p for p in self.particles if p.update(dt)]
-        self.floating_scores = [f for f in self.floating_scores if f.update(dt)]
+        self.generate_until(self.player.x + WIDTH * 3)
 
-        # passive ambient particles
-        if random.random() < 0.16:
-            self.particles.append(
-                Particle(
-                    self.cam_x + WIDTH + random.randint(0, 100),
-                    random.randint(90, GROUND_Y - 80),
-                    random.uniform(-18, -5),
-                    random.uniform(-6, 6),
-                    random.uniform(1.8, 3.5),
-                    random.uniform(1.8, 3.5),
-                    (120, 120, 170),
-                    random.uniform(1, 3),
-                )
-            )
+        self.particles = [p for p in self.particles if p.update(dt)]
+        self.floating = [f for f in self.floating if f.update(dt)]
+
+        if random.random() < 0.14:
+            self.particles.append(Particle(self.cam_x + WIDTH + random.randint(0, 100), random.randint(80, GROUND_Y - 75), random.uniform(-24, -8), random.uniform(-8, 8), random.uniform(1.7, 3.2), random.uniform(1.7, 3.2), (130, 130, 180), random.uniform(1, 2.4)))
+
+        self.cam_x = lerp(self.cam_x, max(0, self.player.x - WIDTH * 0.26), 0.12)
+        if self.cam_shake > 0:
+            self.cam_shake = max(0, self.cam_shake - dt * 22)
+
+        self.cleanup()
 
         if self.player.hp <= 0:
             self.game_over = True
+            self.meta.essence_bank += self.essence_run
+            self.meta.save()
 
-    # ========================================================
-    # DRAW
-    # ========================================================
+    # --------------------------- DRAW ---------------------------
     def draw_background(self, surface):
-        surface.fill(NIGHT_COLOR)
+        surface.fill(NIGHT)
+        pygame.draw.circle(surface, (238, 238, 205), (1030, 110), 50)
+        pygame.draw.circle(surface, NIGHT, (1048, 96), 39)
 
-        # moon
-        pygame.draw.circle(surface, MOON_COLOR, (1040, 110), 48)
-        pygame.draw.circle(surface, NIGHT_COLOR, (1058, 98), 40)
-
-        # stars
-        for i in range(35):
+        for i in range(42):
             sx = (i * 123) % WIDTH
-            sy = (i * 77) % (GROUND_Y - 220)
+            sy = (i * 77) % (GROUND_Y - 210)
             pygame.draw.circle(surface, WHITE, (sx, sy), 1)
 
-        # far hills
         for i in range(-2, 8):
             x = (i * 260) - int(self.cam_x * 0.15) % 260
-            pygame.draw.ellipse(surface, (28, 35, 52), (x, GROUND_Y - 70, 320, 150))
-
-        # closer hills
+            pygame.draw.ellipse(surface, (28, 38, 56), (x, GROUND_Y - 70, 320, 150))
         for i in range(-2, 8):
-            x = (i * 220) - int(self.cam_x * 0.3) % 220
-            pygame.draw.ellipse(surface, (35, 45, 65), (x, GROUND_Y - 40, 260, 120))
+            x = (i * 220) - int(self.cam_x * 0.30) % 220
+            pygame.draw.ellipse(surface, (34, 48, 70), (x, GROUND_Y - 42, 260, 122))
 
-        # ground
-        pygame.draw.rect(surface, (32, 50, 40), (0, GROUND_Y, WIDTH, HEIGHT - GROUND_Y))
-        pygame.draw.rect(surface, (25, 40, 30), (0, GROUND_Y + 16, WIDTH, HEIGHT - GROUND_Y))
-
-        # grass details
-        for x in range(0, WIDTH, 24):
-            h = 6 + ((x * 7) % 8)
-            pygame.draw.line(surface, (45, 80, 52), (x, GROUND_Y), (x + 3, GROUND_Y - h), 2)
+        ground = (32, 54, 42) if self.current_event != "eclipse" else (45, 35, 65)
+        pygame.draw.rect(surface, ground, (0, GROUND_Y, WIDTH, HEIGHT - GROUND_Y))
+        pygame.draw.rect(surface, (26, 42, 30), (0, GROUND_Y + 16, WIDTH, HEIGHT - GROUND_Y))
 
     def draw_world(self, surface):
-        # mist
+        shake_x = random.randint(-int(self.cam_shake), int(self.cam_shake)) if self.cam_shake > 0 else 0
+        shake_y = random.randint(-int(self.cam_shake), int(self.cam_shake)) if self.cam_shake > 0 else 0
+        cam = self.cam_x - shake_x
+
         mist = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-        mist.fill((0, 0, 0, 0))
         for i in range(4):
-            pygame.draw.ellipse(
-                mist,
-                (140, 140, 180, 18),
-                (
-                    -100 + i * 340 - int(self.cam_x * (0.08 + i * 0.01)) % 200,
-                    110 + i * 85,
-                    420,
-                    90,
-                ),
-            )
-        surface.blit(mist, (0, 0))
+            pygame.draw.ellipse(mist, (140, 140, 180, 18), (-100 + i * 340 - int(cam * (0.08 + i * 0.01)) % 200, 115 + i * 85, 420, 90))
+        surface.blit(mist, (0, shake_y))
 
         for house in self.houses:
-            house.draw(surface, self.cam_x)
+            house.draw(surface, cam)
+        for h in self.hunters:
+            h.draw(surface, cam)
+        for w in self.wizards:
+            w.draw(surface, cam)
+        for p in self.particles:
+            p.draw(surface, cam)
 
-        for hunter in self.hunters:
-            hunter.draw(surface, self.cam_x)
+        self.player.draw(surface, cam)
 
-        for wizard in self.wizards:
-            wizard.draw(surface, self.cam_x)
-
-        for particle in self.particles:
-            particle.draw(surface, self.cam_x)
-
-        self.player.draw(surface, self.cam_x)
-
-        # haunting beam
         if self.player.haunting:
-            target = self.nearest_house_in_range()
+            target = self.nearest_house()
             if target:
-                sx1 = world_to_screen(self.player.x, self.cam_x)
-                sx2 = world_to_screen(target.x, self.cam_x)
-                sy1 = int(self.player.y)
-                sy2 = int(target.y - target.h * 0.55)
-
-                for i in range(3):
+                sx1, sy1 = world_to_screen(self.player.x, cam), int(self.player.y)
+                sx2, sy2 = world_to_screen(target.x, cam), int(target.y - target.h * 0.55)
+                for _ in range(3):
                     off = random.randint(-4, 4)
-                    pygame.draw.line(surface, (180, 120, 255), (sx1, sy1 + off), (sx2, sy2 + off), 2)
+                    pygame.draw.line(surface, (185, 125, 255), (sx1, sy1 + off), (sx2, sy2 + off), 2)
 
-        for fs in self.floating_scores:
-            fs.draw(surface, self.cam_x)
+        for ft in self.floating:
+            ft.draw(surface, cam)
 
     def draw_hud(self, surface):
-        panel = pygame.Surface((390, 120), pygame.SRCALPHA)
-        panel.fill((12, 12, 20, 170))
-        surface.blit(panel, (16, 16))
-        pygame.draw.rect(surface, (90, 90, 120), (16, 16, 390, 120), 2, border_radius=12)
+        panel = pygame.Surface((520, 155), pygame.SRCALPHA)
+        panel.fill((12, 12, 22, 180))
+        surface.blit(panel, (16, 14))
+        pygame.draw.rect(surface, (90, 90, 122), (16, 14, 520, 155), 2, border_radius=12)
 
-        draw_text(surface, f"Pontos: {self.player.score}", FONT_MD, YELLOW, 30, 28)
-        draw_text(surface, f"Combo: x{1.0 + min(self.player.combo * 0.1, 1.5):.1f}", FONT_SM, CYAN, 30, 64)
-        draw_text(surface, f"Distância: {int(self.best_distance)} m", FONT_SM, WHITE, 30, 88)
+        draw_text(surface, f"Score: {self.player.score}", FONT_MD, YELLOW, 30, 24)
+        draw_text(surface, f"Combo x{1.0 + min(self.player.combo * 0.08, 2.0):.1f}", FONT_SM, CYAN, 30, 60)
+        draw_text(surface, f"Health: {self.player.hp}/{self.player.max_hp}", FONT_SM, WHITE, 30, 86)
+        draw_text(surface, f"Energy: {int(self.player.energy)}/{self.player.energy_max}", FONT_SM, GREEN, 30, 108)
+        draw_text(surface, f"Essence(run): {self.essence_run}", FONT_SM, ORANGE, 30, 130)
 
-        draw_text(surface, "Vidas:", FONT_SM, WHITE, 250, 30)
-        for i in range(self.player.hp):
-            pygame.draw.circle(surface, (220, 245, 255), (310 + i * 28, 40), 10)
-            pygame.draw.circle(surface, (120, 220, 255), (310 + i * 28, 40), 12, 2)
+        draw_text(surface, f"Event: {self.current_event}", FONT_SM, ORANGE, 280, 60)
+        draw_text(surface, f"Diff: {self.difficulty:.1f}", FONT_SM, WHITE, 280, 86)
+        draw_text(surface, f"Dist: {self.best_dist}m", FONT_SM, WHITE, 280, 108)
 
-        draw_text(surface, f"Dificuldade: {self.difficulty:.1f}", FONT_SM, ORANGE, 250, 66)
+        bw = 190
+        pygame.draw.rect(surface, (34, 48, 40), (330, 130, bw, 14), border_radius=6)
+        fill = int((self.player.energy / self.player.energy_max) * bw)
+        pygame.draw.rect(surface, (60, 220, 130), (330, 130, fill, 14), border_radius=6)
 
-        draw_text(surface, "A/D ou ←/→ mover | W/S voar | SPACE assombrar | SHIFT dash", FONT_SM, LIGHT_GRAY, 16, HEIGHT - 34)
-
-        target = self.nearest_house_in_range()
-        if target and not target.haunted:
-            draw_text(surface, "Casa ao alcance! Segure SPACE para assombrar", FONT_SM, PURPLE, WIDTH // 2, 28, center=True)
-
-    def draw_game_over(self, surface):
-        overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-        overlay.fill((0, 0, 0, 170))
-        surface.blit(overlay, (0, 0))
-
-        draw_text(surface, "FIM DE JOGO", FONT_LG, RED, WIDTH // 2, HEIGHT // 2 - 120, center=True)
-        draw_text(surface, f"Pontuação final: {self.player.score}", FONT_MD, YELLOW, WIDTH // 2, HEIGHT // 2 - 40, center=True)
-        draw_text(surface, f"Casas assombradas: {sum(1 for h in self.houses if h.haunted)}+", FONT_MD, CYAN, WIDTH // 2, HEIGHT // 2 + 5, center=True)
-        draw_text(surface, f"Distância percorrida: {int(self.best_distance)} m", FONT_MD, WHITE, WIDTH // 2, HEIGHT // 2 + 50, center=True)
-        draw_text(surface, "Pressione R para reiniciar", FONT_MD, GREEN, WIDTH // 2, HEIGHT // 2 + 130, center=True)
+        tips = "SPACE haunt | LCTRL+SPACE deep haunt | SHIFT dash | Q teleport | E invis | F AOE | ESC pause"
+        draw_text(surface, tips, FONT_SM, (190, 195, 215), 16, HEIGHT - 34)
 
     def draw_pause(self, surface):
-        overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-        overlay.fill((0, 0, 0, 120))
-        surface.blit(overlay, (0, 0))
-        draw_text(surface, "PAUSADO", FONT_LG, WHITE, WIDTH // 2, HEIGHT // 2, center=True)
+        ov = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        ov.fill((0, 0, 0, 130))
+        surface.blit(ov, (0, 0))
+        draw_text(surface, "PAUSED", FONT_LG, WHITE, WIDTH // 2, HEIGHT // 2 - 20, center=True)
+
+    def draw_game_over(self, surface):
+        ov = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        ov.fill((0, 0, 0, 170))
+        surface.blit(ov, (0, 0))
+        draw_text(surface, "GAME OVER", FONT_LG, RED, WIDTH // 2, HEIGHT // 2 - 120, center=True)
+        draw_text(surface, f"Final score: {self.player.score}", FONT_MD, YELLOW, WIDTH // 2, HEIGHT // 2 - 40, center=True)
+        draw_text(surface, f"Distance: {self.best_dist}m", FONT_MD, WHITE, WIDTH // 2, HEIGHT // 2 + 4, center=True)
+        draw_text(surface, f"Essence gained: {self.essence_run}", FONT_MD, GREEN, WIDTH // 2, HEIGHT // 2 + 48, center=True)
+        draw_text(surface, "Press R to restart | U to upgrade", FONT_MD, CYAN, WIDTH // 2, HEIGHT // 2 + 122, center=True)
 
     def draw(self, surface):
         self.draw_background(surface)
         self.draw_world(surface)
         self.draw_hud(surface)
-
         if self.paused and not self.game_over:
             self.draw_pause(surface)
-
         if self.game_over:
             self.draw_game_over(surface)
 
+
 # ============================================================
-# MENU
+# MENU + UPGRADE
 # ============================================================
-def draw_menu(surface, blink_timer):
-    surface.fill((10, 10, 22))
+def draw_menu(surface, blink):
+    surface.fill((10, 10, 24))
+    pygame.draw.circle(surface, (240, 240, 205), (960, 110), 56)
+    pygame.draw.circle(surface, (10, 10, 24), (978, 98), 44)
 
-    pygame.draw.circle(surface, MOON_COLOR, (950, 120), 56)
-    pygame.draw.circle(surface, (10, 10, 22), (970, 104), 44)
+    draw_text(surface, "GHOST HAUNTER", FONT_LG, CYAN, WIDTH // 2, 150, center=True)
+    draw_text(surface, "Strategic infinite haunting in procedural houses", FONT_MD, WHITE, WIDTH // 2, 220, center=True)
+    draw_text(surface, "Use risk/reward, abilities and upgrades to survive deeper worlds.", FONT_SM, (190, 195, 210), WIDTH // 2, 260, center=True)
 
-    draw_text(surface, "GHOST HAUNTER", FONT_LG, CYAN, WIDTH // 2, 160, center=True)
-    draw_text(surface, "Assombre casas. Fuja de caçadores e feiticeiros.", FONT_MD, WHITE, WIDTH // 2, 240, center=True)
-    draw_text(surface, "Jogo infinito com mapa procedural e perigo crescente.", FONT_SM, LIGHT_GRAY, WIDTH // 2, 285, center=True)
+    if int(blink * 2) % 2 == 0:
+        draw_text(surface, "Press ENTER to start", FONT_MD, GREEN, WIDTH // 2, 560, center=True)
+    draw_text(surface, "Press U for upgrades", FONT_MD, ORANGE, WIDTH // 2, 600, center=True)
 
-    # mini ghost icon
-    gx, gy = WIDTH // 2, 410
-    pygame.draw.circle(surface, (220, 245, 255), (gx, gy), 38)
-    pygame.draw.rect(surface, (220, 245, 255), (gx - 38, gy, 76, 48), border_radius=18)
-    pygame.draw.circle(surface, BLACK, (gx - 12, gy - 4), 5)
-    pygame.draw.circle(surface, BLACK, (gx + 12, gy - 4), 5)
-    pygame.draw.arc(surface, BLACK, (gx - 14, gy + 6, 28, 18), math.pi * 0.1, math.pi * 0.9, 3)
 
-    for i in range(3):
-        pygame.draw.line(surface, (180, 220, 255), (gx - 34 + i * 24, gy + 40), (gx - 24 + i * 24, gy + 52), 6)
+def draw_upgrade_menu(surface, meta: MetaProgress, selected):
+    surface.fill((12, 10, 28))
+    draw_text(surface, "UPGRADES", FONT_LG, CYAN, WIDTH // 2, 120, center=True)
+    draw_text(surface, f"Banked Essence: {meta.essence_bank}", FONT_MD, GREEN, WIDTH // 2, 190, center=True)
 
-    if int(blink_timer * 2) % 2 == 0:
-        draw_text(surface, "Pressione ENTER para começar", FONT_MD, GREEN, WIDTH // 2, 590, center=True)
+    items = [
+        ("speed", "Move Speed", meta.speed_level),
+        ("haunt", "Haunting Speed", meta.haunt_level),
+        ("power", "Ability/Score Power", meta.power_level),
+    ]
 
-    draw_text(surface, "Controles: A/D mover | W/S voar | SPACE assombrar | SHIFT dash | ESC pausa",
-              FONT_SM, LIGHT_GRAY, WIDTH // 2, 650, center=True)
+    for idx, (key, name, level) in enumerate(items):
+        y = 270 + idx * 110
+        active = idx == selected
+        col = YELLOW if active else WHITE
+        cost = meta.cost(key)
+        draw_text(surface, f"{name}", FONT_MD, col, WIDTH // 2, y, center=True)
+        draw_text(surface, f"Level: {level}  |  Cost: {cost} essence", FONT_SM, (190, 195, 210), WIDTH // 2, y + 34, center=True)
+
+    draw_text(surface, "UP/DOWN select | ENTER buy | ESC back", FONT_SM, (200, 200, 220), WIDTH // 2, HEIGHT - 70, center=True)
+
+
+def try_buy_upgrade(meta: MetaProgress, key):
+    cost = meta.cost(key)
+    if meta.essence_bank >= cost:
+        meta.essence_bank -= cost
+        setattr(meta, f"{key}_level", getattr(meta, f"{key}_level") + 1)
+        meta.save()
+        return True
+    return False
+
 
 # ============================================================
 # MAIN LOOP
 # ============================================================
 def main():
-    game = Game()
+    meta = MetaProgress.load()
+    game = Game(meta)
     state = "menu"
-    blink_timer = 0.0
+    blink = 0.0
+    upgrade_idx = 0
 
     while True:
         dt = clock.tick(FPS) / 1000.0
-        blink_timer += dt
+        blink += dt
+        keydowns = []
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -787,26 +854,44 @@ def main():
                 sys.exit()
 
             if event.type == pygame.KEYDOWN:
+                keydowns.append(event.key)
+
                 if state == "menu":
                     if event.key == pygame.K_RETURN:
                         game.reset()
                         state = "playing"
+                    if event.key == pygame.K_u:
+                        state = "upgrade"
 
                 elif state == "playing":
                     if event.key == pygame.K_ESCAPE:
                         game.paused = not game.paused
-
                     if game.game_over and event.key == pygame.K_r:
                         game.reset()
+                    if game.game_over and event.key == pygame.K_u:
+                        state = "upgrade"
+
+                elif state == "upgrade":
+                    if event.key == pygame.K_ESCAPE:
+                        state = "menu"
+                    if event.key == pygame.K_UP:
+                        upgrade_idx = (upgrade_idx - 1) % 3
+                    if event.key == pygame.K_DOWN:
+                        upgrade_idx = (upgrade_idx + 1) % 3
+                    if event.key == pygame.K_RETURN:
+                        key = ["speed", "haunt", "power"][upgrade_idx]
+                        try_buy_upgrade(meta, key)
 
         if state == "menu":
-            draw_menu(screen, blink_timer)
-
+            draw_menu(screen, blink)
+        elif state == "upgrade":
+            draw_upgrade_menu(screen, meta, upgrade_idx)
         elif state == "playing":
-            game.update(dt)
+            game.update(dt, keydowns)
             game.draw(screen)
 
         pygame.display.flip()
+
 
 if __name__ == "__main__":
     main()

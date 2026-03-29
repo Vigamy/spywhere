@@ -3,11 +3,11 @@ import time
 import datetime
 import sys
 import logging
-import subprocess
 import socket
 import uuid
 import getpass
 import pyautogui
+import requests
 from dotenv import load_dotenv
 
 # Get the directory where the script is located
@@ -142,41 +142,31 @@ def send_screenshot_to_api(filepath):
 
     client_ip = get_machine_ip()
     username = get_user_identifier()
-
-    cmd = [
-        "curl",
-        "-sS",
-        "-X",
-        "POST",
-        UPLOAD_API_URL,
-        "-F",
-        f"file=@{filepath}",
-        "-F",
-        f"client_ip={client_ip}",
-        "-F",
-        f"username={username}",
-    ]
-
+    headers = {}
     if UPLOAD_API_TOKEN:
-        cmd.extend(["-H", f"Authorization: Bearer {UPLOAD_API_TOKEN}"])
+        headers["Authorization"] = f"Bearer {UPLOAD_API_TOKEN}"
 
     try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if result.returncode == 0:
-            logging.info("Upload enviado com sucesso para API.")
-        else:
-            logging.error(
-                "Falha no upload (%s): %s",
-                result.returncode,
-                (result.stderr or result.stdout).strip(),
+        with open(filepath, "rb") as image_file:
+            response = requests.post(
+                UPLOAD_API_URL,
+                files={"file": image_file},
+                data={"client_ip": client_ip, "username": username},
+                headers=headers,
+                timeout=60,
             )
+
+        if response.ok:
+            logging.info("Upload enviado com sucesso para API.")
+            return
+
+        logging.error(
+            "Falha no upload (%s): %s",
+            response.status_code,
+            response.text.strip(),
+        )
     except Exception as e:
-        logging.exception("Erro ao executar curl para upload: %s", e)
+        logging.exception("Erro ao enviar upload com requests: %s", e)
 
 
 def cleanup_old_files():

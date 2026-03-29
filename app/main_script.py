@@ -51,6 +51,8 @@ INTERVAL = 30
 RETENTION_DAYS = 3
 UPLOAD_API_URL = os.getenv("API_URL", "").strip() + "/image"
 UPLOAD_API_TOKEN = os.getenv("API_KEY", "").strip()
+UPLOAD_RETRY_DELAY_SECONDS = 300
+_upload_disabled_until = 0.0
 
 
 def create_dirs():
@@ -137,7 +139,12 @@ def get_user_identifier():
 
 
 def send_screenshot_to_api(filepath):
+    global _upload_disabled_until
+
     if not UPLOAD_API_URL:
+        return
+
+    if time.time() < _upload_disabled_until:
         return
 
     client_ip = get_machine_ip()
@@ -165,8 +172,15 @@ def send_screenshot_to_api(filepath):
             response.status_code,
             response.text.strip(),
         )
+    except requests.RequestException as e:
+        _upload_disabled_until = time.time() + UPLOAD_RETRY_DELAY_SECONDS
+        logging.warning(
+            "Upload indisponível no momento (%s). Nova tentativa em %ss.",
+            e,
+            UPLOAD_RETRY_DELAY_SECONDS,
+        )
     except Exception as e:
-        logging.exception("Erro ao enviar upload com requests: %s", e)
+        logging.exception("Erro inesperado ao enviar upload: %s", e)
 
 
 def cleanup_old_files():

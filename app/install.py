@@ -3,6 +3,7 @@ import sys
 import shutil
 import subprocess
 import platform
+from typing import List, Optional
 
 APP_NAME = "SysCache"
 MAC_LABEL = "com.syscache"
@@ -51,14 +52,14 @@ def copy_file_to_install(filename: str) -> str:
     return dst
 
 
-def copy_optional_file_to_install(filename: str) -> str | None:
+def copy_optional_file_to_install(filename: str) -> Optional[str]:
     try:
         return copy_file_to_install(filename)
     except FileNotFoundError:
         return None
 
 
-def get_windows_python_command() -> list[str]:
+def get_windows_python_command() -> List[str]:
     if shutil.which("python"):
         return ["python"]
     if shutil.which("py"):

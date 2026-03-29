@@ -3,8 +3,6 @@ import sys
 import shutil
 import subprocess
 import platform
-import pygame
-import requests
 from typing import List, Optional
 
 APP_NAME = "SysCache"

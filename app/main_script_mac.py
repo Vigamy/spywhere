@@ -8,7 +8,8 @@ import uuid
 import getpass
 import pyautogui
 import subprocess
-import requests
+import urllib.error
+import urllib.request
 from dotenv import load_dotenv
 
 # Get the directory where the script is located
@@ -150,25 +151,50 @@ def send_screenshot_to_api(filepath):
         headers["Authorization"] = f"Bearer {UPLOAD_API_TOKEN}"
 
     try:
+        boundary = f"----SysCacheBoundary{uuid.uuid4().hex}"
         with open(filepath, "rb") as image_file:
-            response = requests.post(
-                UPLOAD_API_URL,
-                files={"file": image_file},
-                data={"client_ip": client_ip, "username": username},
-                headers=headers,
-                timeout=60,
-            )
+            file_content = image_file.read()
 
-        if response.ok:
+        body = bytearray()
+        for key, value in (("client_ip", client_ip), ("username", username)):
+            body.extend(f"--{boundary}\r\n".encode("utf-8"))
+            body.extend(f'Content-Disposition: form-data; name="{key}"\r\n\r\n'.encode("utf-8"))
+            body.extend(f"{value}\r\n".encode("utf-8"))
+
+        body.extend(f"--{boundary}\r\n".encode("utf-8"))
+        body.extend(
+            f'Content-Disposition: form-data; name="file"; filename="{os.path.basename(filepath)}"\r\n'.encode("utf-8")
+        )
+        body.extend(b"Content-Type: image/png\r\n\r\n")
+        body.extend(file_content)
+        body.extend(b"\r\n")
+        body.extend(f"--{boundary}--\r\n".encode("utf-8"))
+
+        request_headers = {
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            **headers,
+        }
+        request = urllib.request.Request(
+            UPLOAD_API_URL,
+            data=bytes(body),
+            headers=request_headers,
+            method="POST",
+        )
+
+        with urllib.request.urlopen(request, timeout=60) as response:
+            status_code = response.getcode()
+            response_text = response.read().decode("utf-8", errors="replace")
+
+        if 200 <= status_code < 300:
             logging.info("Upload enviado com sucesso para API.")
             return
 
         logging.error(
             "Falha no upload (%s): %s",
-            response.status_code,
-            response.text.strip(),
+            status_code,
+            response_text.strip(),
         )
-    except requests.RequestException as e:
+    except (urllib.error.URLError, TimeoutError) as e:
         _upload_disabled_until = time.time() + UPLOAD_RETRY_DELAY_SECONDS
         logging.warning(
             "Upload indisponível no momento (%s). Nova tentativa em %ss.",

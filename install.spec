@@ -1,13 +1,11 @@
 # -*- mode: python ; coding: utf-8 -*-
 
-from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_submodules
-
-requests_datas, requests_binaries, requests_hiddenimports = collect_all('requests')
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 a = Analysis(
     ['app/install.py'],
     pathex=[],
-    binaries=[] + requests_binaries,
+    binaries=[],
     datas=[
         ('app/main_script.py', '.'),
         ('app/game.py', '.'),
@@ -17,13 +15,10 @@ a = Analysis(
     + collect_data_files('pygame')
     + collect_data_files('pyautogui')
     + collect_data_files('pyscreeze')
-    + collect_data_files('mouseinfo')
-    + requests_datas,
+    + collect_data_files('mouseinfo'),
     hiddenimports=(
         collect_submodules('pygame')
         + collect_submodules('pyautogui')
-        + collect_submodules('requests')
-        + requests_hiddenimports
         + collect_submodules('dotenv')
         + ['PIL', 'pyscreeze', 'pygetwindow', 'pymsgbox', 'pytweening', 'mouseinfo']
         + ['uuid', 'datetime', 'socket', 'getpass', 'json', 'math', 'random', 'dataclasses', 'pathlib']

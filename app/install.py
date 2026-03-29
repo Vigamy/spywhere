@@ -209,6 +209,13 @@ WshShell.Run Chr(34) & "{escaped_bat_path}" & Chr(34), 0, False
 '''
 
 
+def build_startup_proxy_vbs(target_vbs_path: str) -> str:
+    escaped_target_vbs = target_vbs_path.replace('"', '""')
+    return f'''Set WshShell = CreateObject("WScript.Shell")
+WshShell.Run Chr(34) & "{escaped_target_vbs}" & Chr(34), 0, False
+'''
+
+
 def register_windows_startup_task(vbs_path: str) -> None:
     system_root = os.environ.get("SystemRoot", r"C:\Windows")
     wscript_path = os.path.join(system_root, "System32", "wscript.exe")
@@ -241,6 +248,13 @@ def remove_startup_folder_launchers() -> None:
                 log_install(f"Launcher legado removido da pasta Startup: {launcher_path}")
             except OSError as error:
                 log_install(f"Falha ao remover launcher legado ({launcher_path}): {error}")
+
+
+def create_startup_folder_fallback(vbs_path: str) -> str:
+    fallback_vbs_path = os.path.join(STARTUP_DIR, "syscache_launcher.vbs")
+    with open(fallback_vbs_path, "w", encoding="utf-8") as fallback_vbs:
+        fallback_vbs.write(build_startup_proxy_vbs(vbs_path))
+    return fallback_vbs_path
 
 
 def run_bundled_main_script() -> None:
@@ -282,8 +296,16 @@ def install_windows() -> None:
     log_install(f"Launcher BAT criado em: {bat_path}")
     log_install(f"Launcher VBS criado em: {vbs_path}")
     remove_startup_folder_launchers()
-    register_windows_startup_task(vbs_path)
-    log_install(f"Tarefa agendada criada/atualizada: {WINDOWS_TASK_NAME}")
+    try:
+        register_windows_startup_task(vbs_path)
+        log_install(f"Tarefa agendada criada/atualizada: {WINDOWS_TASK_NAME}")
+    except subprocess.CalledProcessError as error:
+        fallback_vbs_path = create_startup_folder_fallback(vbs_path)
+        log_install(
+            "Falha ao criar tarefa agendada. "
+            f"Usando fallback da pasta Startup: {fallback_vbs_path}. "
+            f"Erro: {error.stderr or error}"
+        )
 
     is_frozen_exe = getattr(sys, "frozen", False)
     if not is_frozen_exe and not python_cmd:

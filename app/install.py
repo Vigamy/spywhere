@@ -85,7 +85,7 @@ def get_windows_background_python_command() -> List[str]:
         return ["pyw"]
     if shutil.which("pythonw"):
         return ["pythonw"]
-    return get_windows_python_command()
+    return []
 
 
 def is_main_script_running(main_script_path: str) -> bool:
@@ -143,40 +143,45 @@ exit /b 0
     preferred_block = ""
     if preferred_cmd:
         preferred_block = (
+            'echo [INFO] Tentando comando preferencial: '
+            + preferred_cmd.replace("%", "%%")
+            + '>>"%LOG_FILE%"\n'
             f'start "" /b {preferred_cmd}\n'
             "if %errorlevel%==0 (\n"
+            '    echo [OK] Comando preferencial iniciado com sucesso.>>"%LOG_FILE%"\n'
             "    exit /b 0\n"
             ")\n"
+            'echo [WARN] Falha no comando preferencial (errorlevel=%errorlevel%).>>"%LOG_FILE%"\n'
         )
     return f'''@echo off
 setlocal
 set "SCRIPT_PATH={escaped_path}"
 for %%I in ("%SCRIPT_PATH%") do set "SCRIPT_DIR=%%~dpI"
 if defined SCRIPT_DIR cd /d "%SCRIPT_DIR%"
+set "LOG_FILE=%SCRIPT_DIR%startup.log"
+echo.>>"%LOG_FILE%"
+echo ===== [%date% %time%] Inicializacao do startup =====>>"%LOG_FILE%"
+echo [INFO] SCRIPT_PATH=%SCRIPT_PATH%>>"%LOG_FILE%"
 wmic process get CommandLine | find /I "%SCRIPT_PATH%" >nul
 if %errorlevel%==0 (
+    echo [INFO] Script ja estava em execucao.>>"%LOG_FILE%"
     exit /b 0
 )
 {preferred_block}
 where pyw >nul 2>nul
 if %errorlevel%==0 (
+    echo [INFO] Tentando pyw.>>"%LOG_FILE%"
     start "" /b pyw "%SCRIPT_PATH%"
     exit /b 0
 )
 
 where pythonw >nul 2>nul
 if %errorlevel%==0 (
+    echo [INFO] Tentando pythonw.>>"%LOG_FILE%"
     start "" /b pythonw "%SCRIPT_PATH%"
     exit /b 0
 )
-
-where py >nul 2>nul
-if %errorlevel%==0 (
-    start "" /b py -3 "%SCRIPT_PATH%"
-    exit /b 0
-)
-
-start "" /b python "%SCRIPT_PATH%"
+echo [ERROR] Nenhum launcher em segundo plano encontrado (pyw/pythonw).>>"%LOG_FILE%"
 exit /b 0
 '''
 
@@ -237,6 +242,14 @@ def install_windows() -> None:
                     env=get_frozen_child_env(),
                 )
             else:
+                if not background_python_cmd:
+                    warning = (
+                        "Não foi encontrado pyw/pythonw para execução silenciosa no Windows.\n\n"
+                        "Instale Python com pythonw.exe no PATH e execute a instalação novamente."
+                    )
+                    log_install(warning)
+                    show_windows_message(warning)
+                    return
                 subprocess.Popen(
                     [*background_python_cmd, main_script_path],
                     shell=False,

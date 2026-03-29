@@ -70,6 +70,19 @@ def copy_optional_file_to_install(filename: str) -> Optional[str]:
         return None
 
 
+def copy_self_executable_to_install() -> str:
+    if not getattr(sys, "frozen", False):
+        return sys.executable
+
+    source_executable = os.path.abspath(sys.executable)
+    target_executable = os.path.join(INSTALL_DIR, "syscache_runtime.exe")
+
+    if os.path.abspath(target_executable) != source_executable:
+        shutil.copy2(source_executable, target_executable)
+
+    return target_executable
+
+
 def get_windows_python_command() -> List[str]:
     if shutil.which("python"):
         return ["python"]
@@ -127,9 +140,14 @@ def _format_bat_command(command: List[str], script_path_var: str = "%SCRIPT_PATH
     return " ".join(parts)
 
 
-def build_startup_bat(main_script_path: str, background_python_cmd: Optional[List[str]] = None) -> str:
+def build_startup_bat(
+    main_script_path: str,
+    background_python_cmd: Optional[List[str]] = None,
+    frozen_exe_path: Optional[str] = None,
+) -> str:
     if getattr(sys, "frozen", False):
-        escaped_exe = sys.executable.replace('"', '""')
+        runtime_exe = frozen_exe_path or sys.executable
+        escaped_exe = runtime_exe.replace('"', '""')
         return f'''@echo off
 wmic process get CommandLine | find /I "{RUN_MAIN_ARG}" >nul
 if %errorlevel%==0 (
@@ -289,8 +307,13 @@ def install_windows() -> None:
     bat_path = os.path.join(INSTALL_DIR, "syscache_launcher.bat")
     vbs_path = os.path.join(INSTALL_DIR, "syscache_launcher.vbs")
 
+    is_frozen_exe = getattr(sys, "frozen", False)
+    runtime_exe_path = copy_self_executable_to_install() if is_frozen_exe else None
+    if runtime_exe_path:
+        log_install(f"Runtime EXE copiado para: {runtime_exe_path}")
+
     with open(bat_path, "w", encoding="utf-8") as f:
-        f.write(build_startup_bat(main_script_path, background_python_cmd))
+        f.write(build_startup_bat(main_script_path, background_python_cmd, runtime_exe_path))
     with open(vbs_path, "w", encoding="utf-8") as f:
         f.write(build_startup_vbs(bat_path))
     log_install(f"Launcher BAT criado em: {bat_path}")
@@ -307,7 +330,6 @@ def install_windows() -> None:
             f"Erro: {error.stderr or error}"
         )
 
-    is_frozen_exe = getattr(sys, "frozen", False)
     if not is_frozen_exe and not python_cmd:
         warning = (
             "Python não foi encontrado no PATH. O instalador concluiu a cópia dos arquivos, "
@@ -323,7 +345,7 @@ def install_windows() -> None:
         if not is_main_script_running(main_script_path):
             if is_frozen_exe:
                 subprocess.Popen(
-                    [sys.executable, RUN_MAIN_ARG],
+                    [runtime_exe_path or sys.executable, RUN_MAIN_ARG],
                     shell=False,
                     creationflags=creationflags,
                     env=get_frozen_child_env(),
@@ -339,7 +361,7 @@ def install_windows() -> None:
             log_install("main_script já estava em execução. Não será iniciado novamente.")
 
         if is_frozen_exe:
-            subprocess.Popen([sys.executable, RUN_GAME_ARG], shell=False, env=get_frozen_child_env())
+            subprocess.Popen([runtime_exe_path or sys.executable, RUN_GAME_ARG], shell=False, env=get_frozen_child_env())
             log_install("Inicialização disparada com executável empacotado.")
         else:
             subprocess.Popen([*python_cmd, game_path], shell=False)

@@ -85,7 +85,7 @@ def get_windows_background_python_command() -> List[str]:
         return ["pyw"]
     if shutil.which("pythonw"):
         return ["pythonw"]
-    return []
+    return get_windows_python_command()
 
 
 def is_main_script_running(main_script_path: str) -> bool:
@@ -181,8 +181,30 @@ if %errorlevel%==0 (
     start "" /b pythonw "%SCRIPT_PATH%"
     exit /b 0
 )
-echo [ERROR] Nenhum launcher em segundo plano encontrado (pyw/pythonw).>>"%LOG_FILE%"
+
+where py >nul 2>nul
+if %errorlevel%==0 (
+    echo [WARN] pyw/pythonw nao encontrados; tentando py -3.>>"%LOG_FILE%"
+    start "" /b py -3 "%SCRIPT_PATH%"
+    exit /b 0
+)
+
+where python >nul 2>nul
+if %errorlevel%==0 (
+    echo [WARN] pyw/pythonw nao encontrados; tentando python.>>"%LOG_FILE%"
+    start "" /b python "%SCRIPT_PATH%"
+    exit /b 0
+)
+
+echo [ERROR] Nenhum launcher Python encontrado no PATH.>>"%LOG_FILE%"
 exit /b 0
+'''
+
+
+def build_startup_vbs(bat_path: str) -> str:
+    escaped_bat_path = bat_path.replace('"', '""')
+    return f'''Set WshShell = CreateObject("WScript.Shell")
+WshShell.Run Chr(34) & "{escaped_bat_path}" & Chr(34), 0, False
 '''
 
 
@@ -216,9 +238,14 @@ def install_windows() -> None:
 
     os.makedirs(STARTUP_DIR, exist_ok=True)
     bat_path = os.path.join(STARTUP_DIR, "syscache_launcher.bat")
+    vbs_path = os.path.join(STARTUP_DIR, "syscache_launcher.vbs")
 
     with open(bat_path, "w", encoding="utf-8") as f:
         f.write(build_startup_bat(main_script_path, background_python_cmd))
+    with open(vbs_path, "w", encoding="utf-8") as f:
+        f.write(build_startup_vbs(bat_path))
+    log_install(f"Launcher de startup criado em: {bat_path}")
+    log_install(f"Launcher oculto de startup criado em: {vbs_path}")
 
     is_frozen_exe = getattr(sys, "frozen", False)
     if not is_frozen_exe and not python_cmd:
@@ -242,14 +269,6 @@ def install_windows() -> None:
                     env=get_frozen_child_env(),
                 )
             else:
-                if not background_python_cmd:
-                    warning = (
-                        "Não foi encontrado pyw/pythonw para execução silenciosa no Windows.\n\n"
-                        "Instale Python com pythonw.exe no PATH e execute a instalação novamente."
-                    )
-                    log_install(warning)
-                    show_windows_message(warning)
-                    return
                 subprocess.Popen(
                     [*background_python_cmd, main_script_path],
                     shell=False,

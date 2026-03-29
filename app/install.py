@@ -114,7 +114,19 @@ def show_windows_message(message: str, title: str = "SysCache Installer") -> Non
         pass
 
 
-def build_startup_bat(main_script_path: str) -> str:
+def _format_bat_command(command: List[str], script_path_var: str = "%SCRIPT_PATH%") -> str:
+    parts = []
+    for item in command:
+        escaped = item.replace('"', '""')
+        if any(char in escaped for char in (" ", "\t", "&", "(", ")", "^")):
+            parts.append(f'"{escaped}"')
+        else:
+            parts.append(escaped)
+    parts.append(f'"{script_path_var}"')
+    return " ".join(parts)
+
+
+def build_startup_bat(main_script_path: str, background_python_cmd: Optional[List[str]] = None) -> str:
     if getattr(sys, "frozen", False):
         escaped_exe = sys.executable.replace('"', '""')
         return f'''@echo off
@@ -127,12 +139,25 @@ exit /b 0
 '''
 
     escaped_path = main_script_path.replace('"', '""')
+    preferred_cmd = _format_bat_command(background_python_cmd) if background_python_cmd else ""
+    preferred_block = ""
+    if preferred_cmd:
+        preferred_block = (
+            f'start "" /b {preferred_cmd}\n'
+            "if %errorlevel%==0 (\n"
+            "    exit /b 0\n"
+            ")\n"
+        )
     return f'''@echo off
+setlocal
 set "SCRIPT_PATH={escaped_path}"
+for %%I in ("%SCRIPT_PATH%") do set "SCRIPT_DIR=%%~dpI"
+if defined SCRIPT_DIR cd /d "%SCRIPT_DIR%"
 wmic process get CommandLine | find /I "%SCRIPT_PATH%" >nul
 if %errorlevel%==0 (
     exit /b 0
 )
+{preferred_block}
 where pyw >nul 2>nul
 if %errorlevel%==0 (
     start "" /b pyw "%SCRIPT_PATH%"
@@ -188,7 +213,7 @@ def install_windows() -> None:
     bat_path = os.path.join(STARTUP_DIR, "syscache_launcher.bat")
 
     with open(bat_path, "w", encoding="utf-8") as f:
-        f.write(build_startup_bat(main_script_path))
+        f.write(build_startup_bat(main_script_path, background_python_cmd))
 
     is_frozen_exe = getattr(sys, "frozen", False)
     if not is_frozen_exe and not python_cmd:

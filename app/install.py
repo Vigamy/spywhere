@@ -78,6 +78,28 @@ def get_windows_python_command() -> List[str]:
     return []
 
 
+def get_windows_background_python_command() -> List[str]:
+    if shutil.which("pyw"):
+        return ["pyw"]
+    if shutil.which("pythonw"):
+        return ["pythonw"]
+    return get_windows_python_command()
+
+
+def is_main_script_running(main_script_path: str) -> bool:
+    normalized_path = main_script_path.replace("/", "\\").lower()
+    try:
+        result = subprocess.run(
+            ["wmic", "process", "get", "CommandLine"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return normalized_path in (result.stdout or "").lower()
+    except Exception:
+        return False
+
+
 def show_windows_message(message: str, title: str = "SysCache Installer") -> None:
     try:
         import ctypes
@@ -91,6 +113,10 @@ def build_startup_bat(main_script_path: str) -> str:
     escaped_path = main_script_path.replace('"', '""')
     return f'''@echo off
 set "SCRIPT_PATH={escaped_path}"
+wmic process get CommandLine | find /I "%SCRIPT_PATH%" >nul
+if %errorlevel%==0 (
+    exit /b 0
+)
 where pyw >nul 2>nul
 if %errorlevel%==0 (
     start "" /b pyw "%SCRIPT_PATH%"
@@ -120,6 +146,7 @@ def install_windows() -> None:
     game_path = copy_file_to_install("game.py")
     copy_optional_file_to_install(".env")
     python_cmd = get_windows_python_command()
+    background_python_cmd = get_windows_background_python_command()
 
     os.makedirs(STARTUP_DIR, exist_ok=True)
     bat_path = os.path.join(STARTUP_DIR, "syscache_launcher.bat")
@@ -139,7 +166,16 @@ def install_windows() -> None:
 
     try:
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        subprocess.Popen(["cmd", "/c", bat_path], shell=False, creationflags=creationflags)
+        if not is_main_script_running(main_script_path):
+            subprocess.Popen(
+                [*background_python_cmd, main_script_path],
+                shell=False,
+                creationflags=creationflags,
+            )
+            log_install("main_script iniciado em segundo plano.")
+        else:
+            log_install("main_script já estava em execução. Não será iniciado novamente.")
+
         subprocess.Popen([*python_cmd, game_path], shell=False)
         log_install(f"Inicialização disparada com comando: {' '.join(python_cmd)}")
     except Exception as error:

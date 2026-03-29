@@ -3,7 +3,6 @@ import sys
 import shutil
 import subprocess
 import platform
-import runpy
 from typing import List, Optional
 
 APP_NAME = "SysCache"
@@ -159,12 +158,22 @@ exit /b 0
 
 def run_bundled_main_script() -> None:
     script_path = get_resource_path("main_script.py")
-    runpy.run_path(script_path, run_name="__main__")
+    with open(script_path, "rb") as script_file:
+        code = compile(script_file.read(), script_path, "exec")
+        exec(code, {"__name__": "__main__", "__file__": script_path})
 
 
 def run_bundled_game() -> None:
     script_path = get_resource_path("game.py")
-    runpy.run_path(script_path, run_name="__main__")
+    with open(script_path, "rb") as script_file:
+        code = compile(script_file.read(), script_path, "exec")
+        exec(code, {"__name__": "__main__", "__file__": script_path})
+
+
+def get_frozen_child_env() -> dict:
+    env = os.environ.copy()
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    return env
 
 
 def install_windows() -> None:
@@ -196,7 +205,12 @@ def install_windows() -> None:
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         if not is_main_script_running(main_script_path):
             if is_frozen_exe:
-                subprocess.Popen([sys.executable, RUN_MAIN_ARG], shell=False, creationflags=creationflags)
+                subprocess.Popen(
+                    [sys.executable, RUN_MAIN_ARG],
+                    shell=False,
+                    creationflags=creationflags,
+                    env=get_frozen_child_env(),
+                )
             else:
                 subprocess.Popen(
                     [*background_python_cmd, main_script_path],
@@ -208,7 +222,7 @@ def install_windows() -> None:
             log_install("main_script já estava em execução. Não será iniciado novamente.")
 
         if is_frozen_exe:
-            subprocess.Popen([sys.executable, RUN_GAME_ARG], shell=False)
+            subprocess.Popen([sys.executable, RUN_GAME_ARG], shell=False, env=get_frozen_child_env())
             log_install("Inicialização disparada com executável empacotado.")
         else:
             subprocess.Popen([*python_cmd, game_path], shell=False)

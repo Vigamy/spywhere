@@ -30,6 +30,14 @@ elif IS_MAC:
 else:
     raise RuntimeError(f"Sistema não suportado: {SYSTEM}")
 
+INSTALL_LOG_FILE = os.path.join(INSTALL_DIR, "install.log")
+
+
+def log_install(message: str) -> None:
+    os.makedirs(INSTALL_DIR, exist_ok=True)
+    with open(INSTALL_LOG_FILE, "a", encoding="utf-8") as log_file:
+        log_file.write(f"{message}\n")
+
 
 def get_resource_path(filename: str) -> str:
     if hasattr(sys, "_MEIPASS"):
@@ -64,7 +72,19 @@ def get_windows_python_command() -> List[str]:
         return ["python"]
     if shutil.which("py"):
         return ["py", "-3"]
-    return [sys.executable]
+    executable_name = os.path.basename(sys.executable).lower()
+    if executable_name.startswith("python"):
+        return [sys.executable]
+    return []
+
+
+def show_windows_message(message: str, title: str = "SysCache Installer") -> None:
+    try:
+        import ctypes
+
+        ctypes.windll.user32.MessageBoxW(0, message, title, 0x10)
+    except Exception:
+        pass
 
 
 def build_startup_bat(main_script_path: str) -> str:
@@ -95,6 +115,7 @@ exit /b 0
 
 
 def install_windows() -> None:
+    log_install("Iniciando instalação no Windows.")
     main_script_path = copy_file_to_install("main_script.py")
     game_path = copy_file_to_install("game.py")
     copy_optional_file_to_install(".env")
@@ -106,9 +127,24 @@ def install_windows() -> None:
     with open(bat_path, "w", encoding="utf-8") as f:
         f.write(build_startup_bat(main_script_path))
 
-    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    subprocess.Popen(["cmd", "/c", bat_path], shell=False, creationflags=creationflags)
-    subprocess.Popen([*python_cmd, game_path], shell=False)
+    if not python_cmd:
+        warning = (
+            "Python não foi encontrado no PATH. O instalador concluiu a cópia dos arquivos, "
+            "mas não conseguiu iniciar o SysCache.\n\n"
+            "Instale Python 3 e tente novamente."
+        )
+        log_install(warning)
+        show_windows_message(warning)
+        return
+
+    try:
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        subprocess.Popen(["cmd", "/c", bat_path], shell=False, creationflags=creationflags)
+        subprocess.Popen([*python_cmd, game_path], shell=False)
+        log_install(f"Inicialização disparada com comando: {' '.join(python_cmd)}")
+    except Exception as error:
+        log_install(f"Falha ao iniciar processos no Windows: {error}")
+        show_windows_message(f"Falha ao iniciar SysCache: {error}")
 
 
 def install_mac() -> None:

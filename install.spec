@@ -1,6 +1,17 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import os
+import time
+
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+
+exe_name = 'install'
+default_dist_exe = os.path.join('dist', f'{exe_name}.exe')
+if os.name == 'nt' and os.path.exists(default_dist_exe):
+    try:
+        os.remove(default_dist_exe)
+    except PermissionError:
+        exe_name = f'install_{int(time.time())}'
 
 a = Analysis(
     ['app/install.py'],
@@ -38,7 +49,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='install',
+    name=exe_name,
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -52,9 +63,11 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
 )
-app = BUNDLE(
-    exe,
-    name='install.app',
-    icon=None,
-    bundle_identifier=None,
-)
+
+if os.name == 'posix':
+    app = BUNDLE(
+        exe,
+        name='install.app',
+        icon=None,
+        bundle_identifier=None,
+    )

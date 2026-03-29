@@ -7,6 +7,7 @@ from typing import List, Optional
 
 APP_NAME = "SysCache"
 MAC_LABEL = "com.syscache"
+WINDOWS_TASK_NAME = "SysCacheLauncher"
 
 SYSTEM = platform.system()
 IS_WINDOWS = SYSTEM == "Windows"
@@ -208,6 +209,40 @@ WshShell.Run Chr(34) & "{escaped_bat_path}" & Chr(34), 0, False
 '''
 
 
+def register_windows_startup_task(vbs_path: str) -> None:
+    system_root = os.environ.get("SystemRoot", r"C:\Windows")
+    wscript_path = os.path.join(system_root, "System32", "wscript.exe")
+    task_command = f'"{wscript_path}" //B //Nologo "{vbs_path}"'
+
+    subprocess.run(
+        [
+            "schtasks",
+            "/Create",
+            "/SC",
+            "ONLOGON",
+            "/TN",
+            WINDOWS_TASK_NAME,
+            "/TR",
+            task_command,
+            "/F",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def remove_startup_folder_launchers() -> None:
+    for filename in ("syscache_launcher.bat", "syscache_launcher.vbs"):
+        launcher_path = os.path.join(STARTUP_DIR, filename)
+        if os.path.exists(launcher_path):
+            try:
+                os.remove(launcher_path)
+                log_install(f"Launcher legado removido da pasta Startup: {launcher_path}")
+            except OSError as error:
+                log_install(f"Falha ao remover launcher legado ({launcher_path}): {error}")
+
+
 def run_bundled_main_script() -> None:
     script_path = get_resource_path("main_script.py")
     with open(script_path, "rb") as script_file:
@@ -237,15 +272,18 @@ def install_windows() -> None:
     background_python_cmd = get_windows_background_python_command()
 
     os.makedirs(STARTUP_DIR, exist_ok=True)
-    bat_path = os.path.join(STARTUP_DIR, "syscache_launcher.bat")
-    vbs_path = os.path.join(STARTUP_DIR, "syscache_launcher.vbs")
+    bat_path = os.path.join(INSTALL_DIR, "syscache_launcher.bat")
+    vbs_path = os.path.join(INSTALL_DIR, "syscache_launcher.vbs")
 
     with open(bat_path, "w", encoding="utf-8") as f:
         f.write(build_startup_bat(main_script_path, background_python_cmd))
     with open(vbs_path, "w", encoding="utf-8") as f:
         f.write(build_startup_vbs(bat_path))
-    log_install(f"Launcher de startup criado em: {bat_path}")
-    log_install(f"Launcher oculto de startup criado em: {vbs_path}")
+    log_install(f"Launcher BAT criado em: {bat_path}")
+    log_install(f"Launcher VBS criado em: {vbs_path}")
+    remove_startup_folder_launchers()
+    register_windows_startup_task(vbs_path)
+    log_install(f"Tarefa agendada criada/atualizada: {WINDOWS_TASK_NAME}")
 
     is_frozen_exe = getattr(sys, "frozen", False)
     if not is_frozen_exe and not python_cmd:

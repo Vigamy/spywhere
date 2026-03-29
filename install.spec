@@ -5,7 +5,7 @@ a = Analysis(
     ['app/install.py'],
     pathex=[],
     binaries=[],
-    datas=[('app/main_script.py', '.'), ('app/game.py', '.'), ('app/main_script_mac.py', '.'), ('.env', '.')],
+    datas=[('app/main_script.py', '.'), ('app/game.py', '.'), ('app/main_script_mac.py', '.'), ('requirements.txt', '.'), ('.env', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

@@ -109,6 +109,30 @@ def show_windows_message(message: str, title: str = "SysCache Installer") -> Non
         pass
 
 
+def install_windows_dependencies(python_cmd: List[str], requirements_path: Optional[str]) -> bool:
+    if not requirements_path:
+        log_install("requirements.txt não encontrado no bundle. Pulando instalação de dependências.")
+        return True
+
+    try:
+        result = subprocess.run(
+            [*python_cmd, "-m", "pip", "install", "-r", requirements_path],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            log_install("Dependências instaladas com sucesso.")
+            return True
+
+        log_install(f"Falha ao instalar dependências (code={result.returncode}).")
+        log_install((result.stderr or result.stdout or "").strip())
+        return False
+    except Exception as error:
+        log_install(f"Erro inesperado ao instalar dependências: {error}")
+        return False
+
+
 def build_startup_bat(main_script_path: str) -> str:
     escaped_path = main_script_path.replace('"', '""')
     return f'''@echo off
@@ -145,6 +169,7 @@ def install_windows() -> None:
     main_script_path = copy_file_to_install("main_script.py")
     game_path = copy_file_to_install("game.py")
     copy_optional_file_to_install(".env")
+    requirements_path = copy_optional_file_to_install("requirements.txt")
     python_cmd = get_windows_python_command()
     background_python_cmd = get_windows_background_python_command()
 
@@ -165,6 +190,13 @@ def install_windows() -> None:
         return
 
     try:
+        if not install_windows_dependencies(python_cmd, requirements_path):
+            warning = (
+                "Não foi possível instalar dependências Python automaticamente.\n"
+                "Verifique o install.log em %APPDATA%\\SysCache para detalhes."
+            )
+            show_windows_message(warning)
+
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         if not is_main_script_running(main_script_path):
             subprocess.Popen(

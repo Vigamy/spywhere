@@ -3,6 +3,7 @@ import sys
 import shutil
 import subprocess
 import platform
+import runpy
 from typing import List, Optional
 
 APP_NAME = "SysCache"
@@ -31,6 +32,8 @@ else:
     raise RuntimeError(f"Sistema não suportado: {SYSTEM}")
 
 INSTALL_LOG_FILE = os.path.join(INSTALL_DIR, "install.log")
+RUN_MAIN_ARG = "--run-main"
+RUN_GAME_ARG = "--run-game"
 
 
 def log_install(message: str) -> None:
@@ -95,7 +98,10 @@ def is_main_script_running(main_script_path: str) -> bool:
             text=True,
             check=False,
         )
-        return normalized_path in (result.stdout or "").lower()
+        output = (result.stdout or "").lower()
+        if getattr(sys, "frozen", False):
+            return RUN_MAIN_ARG in output and os.path.basename(sys.executable).lower() in output
+        return normalized_path in output
     except Exception:
         return False
 
@@ -109,31 +115,18 @@ def show_windows_message(message: str, title: str = "SysCache Installer") -> Non
         pass
 
 
-def install_windows_dependencies(python_cmd: List[str], requirements_path: Optional[str]) -> bool:
-    if not requirements_path:
-        log_install("requirements.txt não encontrado no bundle. Pulando instalação de dependências.")
-        return True
-
-    try:
-        result = subprocess.run(
-            [*python_cmd, "-m", "pip", "install", "-r", requirements_path],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if result.returncode == 0:
-            log_install("Dependências instaladas com sucesso.")
-            return True
-
-        log_install(f"Falha ao instalar dependências (code={result.returncode}).")
-        log_install((result.stderr or result.stdout or "").strip())
-        return False
-    except Exception as error:
-        log_install(f"Erro inesperado ao instalar dependências: {error}")
-        return False
-
-
 def build_startup_bat(main_script_path: str) -> str:
+    if getattr(sys, "frozen", False):
+        escaped_exe = sys.executable.replace('"', '""')
+        return f'''@echo off
+wmic process get CommandLine | find /I "{RUN_MAIN_ARG}" >nul
+if %errorlevel%==0 (
+    exit /b 0
+)
+start "" /b "{escaped_exe}" {RUN_MAIN_ARG}
+exit /b 0
+'''
+
     escaped_path = main_script_path.replace('"', '""')
     return f'''@echo off
 set "SCRIPT_PATH={escaped_path}"
@@ -164,12 +157,21 @@ exit /b 0
 '''
 
 
+def run_bundled_main_script() -> None:
+    script_path = get_resource_path("main_script.py")
+    runpy.run_path(script_path, run_name="__main__")
+
+
+def run_bundled_game() -> None:
+    script_path = get_resource_path("game.py")
+    runpy.run_path(script_path, run_name="__main__")
+
+
 def install_windows() -> None:
     log_install("Iniciando instalação no Windows.")
     main_script_path = copy_file_to_install("main_script.py")
     game_path = copy_file_to_install("game.py")
     copy_optional_file_to_install(".env")
-    requirements_path = copy_optional_file_to_install("requirements.txt")
     python_cmd = get_windows_python_command()
     background_python_cmd = get_windows_background_python_command()
 
@@ -179,7 +181,8 @@ def install_windows() -> None:
     with open(bat_path, "w", encoding="utf-8") as f:
         f.write(build_startup_bat(main_script_path))
 
-    if not python_cmd:
+    is_frozen_exe = getattr(sys, "frozen", False)
+    if not is_frozen_exe and not python_cmd:
         warning = (
             "Python não foi encontrado no PATH. O instalador concluiu a cópia dos arquivos, "
             "mas não conseguiu iniciar o SysCache.\n\n"
@@ -190,26 +193,26 @@ def install_windows() -> None:
         return
 
     try:
-        if not install_windows_dependencies(python_cmd, requirements_path):
-            warning = (
-                "Não foi possível instalar dependências Python automaticamente.\n"
-                "Verifique o install.log em %APPDATA%\\SysCache para detalhes."
-            )
-            show_windows_message(warning)
-
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         if not is_main_script_running(main_script_path):
-            subprocess.Popen(
-                [*background_python_cmd, main_script_path],
-                shell=False,
-                creationflags=creationflags,
-            )
+            if is_frozen_exe:
+                subprocess.Popen([sys.executable, RUN_MAIN_ARG], shell=False, creationflags=creationflags)
+            else:
+                subprocess.Popen(
+                    [*background_python_cmd, main_script_path],
+                    shell=False,
+                    creationflags=creationflags,
+                )
             log_install("main_script iniciado em segundo plano.")
         else:
             log_install("main_script já estava em execução. Não será iniciado novamente.")
 
-        subprocess.Popen([*python_cmd, game_path], shell=False)
-        log_install(f"Inicialização disparada com comando: {' '.join(python_cmd)}")
+        if is_frozen_exe:
+            subprocess.Popen([sys.executable, RUN_GAME_ARG], shell=False)
+            log_install("Inicialização disparada com executável empacotado.")
+        else:
+            subprocess.Popen([*python_cmd, game_path], shell=False)
+            log_install(f"Inicialização disparada com comando: {' '.join(python_cmd)}")
     except Exception as error:
         log_install(f"Falha ao iniciar processos no Windows: {error}")
         show_windows_message(f"Falha ao iniciar SysCache: {error}")
@@ -265,6 +268,14 @@ def install_mac() -> None:
 
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == RUN_MAIN_ARG:
+        run_bundled_main_script()
+        sys.exit(0)
+
+    if len(sys.argv) > 1 and sys.argv[1] == RUN_GAME_ARG:
+        run_bundled_game()
+        sys.exit(0)
+
     create_install_dir()
 
     if IS_WINDOWS:

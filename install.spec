@@ -6,7 +6,12 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[('app/main_script.py', '.'), ('app/game.py', '.'), ('app/main_script_mac.py', '.'), ('.env', '.')],
-    hiddenimports=['requests', 'dotenv', 'pygame', 'pyautogui', 'PIL', 'pyscreeze', 'pygetwindow', 'pymsgbox', 'pytweening', 'mouseinfo'],
+    hiddenimports=[
+        'requests', 'dotenv', 'pygame', 'pyautogui', 'PIL', 'pyscreeze',
+        'pygetwindow', 'pymsgbox', 'pytweening', 'mouseinfo',
+        'uuid', 'datetime', 'socket', 'getpass', 'json', 'math', 'random',
+        'dataclasses', 'pathlib'
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

